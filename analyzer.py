@@ -1,6 +1,7 @@
 """Study-level signal analysis built on a Monte Carlo context."""
 
 from dataclasses import dataclass
+from math import ceil, floor, log10
 from pathlib import Path
 
 from assets import Assets
@@ -16,9 +17,24 @@ from signal_analysis import (
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
-XI_PLOT_LIMITS = (0.0, 1.1)
+XI_PLOT_LIMITS = (0.4, 1.1)
 DESIGN_FN_RANGE_HZ = (2.0, 50.0)
 DESIGN_XI_RANGE = (0.6, 1.0)
+POST_CONTINGENCY_PLOT_END_TIME_S = 5.0
+
+
+def _round_up_to_nice_number(value: float) -> float:
+    """Round a positive value up to a 1-2-5 value at its decimal scale."""
+    if value <= 0:
+        raise ValueError("The value to round must be positive.")
+
+    magnitude = 10.0 ** floor(log10(value))
+    scaled_value = value / magnitude
+    for rounded_value in (1.0, 2.0, 5.0, 10.0):
+        if scaled_value <= rounded_value:
+            return rounded_value * magnitude
+
+    raise AssertionError("A 1-2-5 rounded value should always be found.")
 
 
 @dataclass(frozen=True)
@@ -97,20 +113,54 @@ class SignalStudyAnalysis:
 
     @property
     def stable_run_ids(self) -> tuple[int, ...]:
-        """Return initialized runs that settled by the end of simulation."""
+        """Return initialized runs settled within the final-timing tolerance."""
         return tuple(
             result.run_id
             for result in self.run_results
-            if result.stability is not None and result.stability.is_stable
+            if result.stability is not None and result.stability.is_settled
         )
 
     @property
     def unsettled_post_contingency_run_ids(self) -> tuple[int, ...]:
-        """Return initialized runs that did not settle by simulation end."""
+        """Return initialized runs outside the final-timing tolerance."""
         return tuple(
             result.run_id
             for result in self.run_results
-            if result.stability is not None and not result.stability.is_stable
+            if result.stability is not None and not result.stability.is_settled
+        )
+
+    @property
+    def stability_not_evaluated_run_ids(self) -> tuple[int, ...]:
+        """Return initialized runs that do not reach the minimum duration."""
+        return tuple(
+            result.run_id
+            for result in self.run_results
+            if result.initialization.is_well_initialized and result.stability is None
+        )
+
+    @property
+    def has_stability_assessments(self) -> bool:
+        """Return whether at least one run has a post-fault assessment."""
+        return any(result.stability is not None for result in self.run_results)
+
+    @property
+    def above_voltage_threshold_after_evaluation_run_ids(self) -> tuple[int, ...]:
+        """Return runs that remain above 0.8 pu after the area window."""
+        return tuple(
+            result.run_id
+            for result in self.run_results
+            if result.stability is not None
+            and result.stability.remains_above_voltage_threshold_after_evaluation
+        )
+
+    @property
+    def below_voltage_threshold_after_evaluation_run_ids(self) -> tuple[int, ...]:
+        """Return runs that fall below 0.8 pu after the area window."""
+        return tuple(
+            result.run_id
+            for result in self.run_results
+            if result.stability is not None
+            and not result.stability.remains_above_voltage_threshold_after_evaluation
         )
 
 
@@ -289,6 +339,271 @@ class MonteCarloAnalyzer:
         figure.tight_layout()
         return figure
 
+    def plot_post_clearance_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Plot the first post-clearance-second area against weighted fn and xi."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        weighted_points_by_run_id = {
+            point.run_id: point for point in controller_analysis.weighted_run_points
+        }
+        rows = [
+            (
+                weighted_points_by_run_id[result.run_id],
+                result.stability.relative_error_area_s * 100,
+                result.stability.is_settled,
+            )
+            for result in signal_analysis.run_results
+            if result.stability is not None
+            and result.run_id in weighted_points_by_run_id
+        ]
+        if not rows:
+            raise ValueError("No runs contain both post-clearance area and controller data.")
+
+        figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
+        groups = (
+            (True, "Settled", "tab:green"),
+            (False, "Unsettled", "tab:red"),
+        )
+        dimensions = (
+            ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (2.0, 20.0)),
+            ("xi", "Power-weighted damping ratio, xi", (0.6, 1.0)),
+        )
+        for axis, (attribute, label, x_limits) in zip(axes, dimensions):
+            for is_settled, group_label, color in groups:
+                points = [row for row in rows if row[2] == is_settled]
+                axis.scatter(
+                    [getattr(point, attribute) for point, _, _ in points],
+                    [area for _, area, _ in points],
+                    color=color,
+                    s=20,
+                    alpha=0.7,
+                    label=group_label,
+                )
+            x_values = np.asarray(
+                [getattr(point, attribute) for point, _, _ in rows], dtype=float
+            )
+            area_values = np.asarray([area for _, area, _ in rows], dtype=float)
+            linear_coefficients = np.polyfit(x_values, area_values, deg=1)
+            fitted_areas = np.polyval(linear_coefficients, x_values)
+            residual_sum = float(np.sum((area_values - fitted_areas) ** 2))
+            total_sum = float(np.sum((area_values - area_values.mean()) ** 2))
+            r_squared = 1.0 - residual_sum / total_sum if total_sum else 0.0
+            curve_x = np.linspace(x_values.min(), x_values.max(), 200)
+            axis.plot(
+                curve_x,
+                np.polyval(linear_coefficients, curve_x),
+                color="tab:blue",
+                linewidth=1.5,
+                label=f"Linear fit (R^2={r_squared:.3f})",
+            )
+            axis.axhline(
+                10.0,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1.0,
+                label="10 %*s reference",
+            )
+            axis.axhline(
+                5.0,
+                color="tab:orange",
+                linestyle="--",
+                linewidth=1.0,
+                label="5 %*s reference",
+            )
+            axis.set_xlabel(label)
+            axis.set_xlim(*x_limits)
+            axis.set_ylim(bottom=0.0)
+            axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="upper right")
+
+        axes[0].set_ylabel("Post-clearance relative-error area (%*s)")
+        figure.suptitle(
+            f"{signal_analysis.signal_name}: post-clearance area vs. weighted parameters"
+        )
+        figure.tight_layout()
+        return figure
+
+    def plot_fault_on_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Plot the area from fault inception to clearance."""
+        criteria = self._stability_criteria_from(signal_analysis)
+        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+            controller_analysis,
+            signal_analysis,
+            metric_attribute="dynamic_performance_index_pu_s",
+            y_label="Fault-on absolute-voltage area (pu*s)",
+            title=(
+                f"{signal_analysis.signal_name}: fault-on area "
+                f"({criteria.fault_time_s:.2f}-{criteria.dynamic_performance_index_end_time_s:.2f} s)"
+            ),
+        )
+
+    def plot_recovery_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Plot the area from clearance through the remainder of the first second."""
+        criteria = self._stability_criteria_from(signal_analysis)
+        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+            controller_analysis,
+            signal_analysis,
+            metric_attribute="recovery_area_pu_s",
+            y_label="Recovery absolute-voltage area (pu*s)",
+            title=(
+                f"{signal_analysis.signal_name}: recovery area "
+                f"({criteria.dynamic_performance_index_end_time_s:.2f}-"
+                f"{criteria.response_area_end_time_s:.2f} s)"
+            ),
+        )
+
+    def plot_unified_response_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Plot the unified one-second area from fault inception."""
+        criteria = self._stability_criteria_from(signal_analysis)
+        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+            controller_analysis,
+            signal_analysis,
+            metric_attribute="unified_response_area_pu_s",
+            y_label="Unified response absolute-voltage area (pu*s)",
+            title=(
+                f"{signal_analysis.signal_name}: unified response area "
+                f"({criteria.fault_time_s:.2f}-{criteria.response_area_end_time_s:.2f} s)"
+            ),
+        )
+
+    def plot_post_fault_persistence_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Plot the separate area from 2 s to each run end, capped at 10 s."""
+        criteria = self._stability_criteria_from(signal_analysis)
+        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+            controller_analysis,
+            signal_analysis,
+            metric_attribute="post_fault_persistence_area_pu_s",
+            y_label="Post-fault persistence area (pu*s)",
+            title=(
+                f"{signal_analysis.signal_name}: post-fault persistence area "
+                f"({criteria.post_fault_persistence_start_time_s:.2f} s to "
+                f"min(simulation end, "
+                f"{criteria.post_fault_persistence_max_end_time_s:.2f} s))"
+            ),
+        )
+
+    def plot_dynamic_performance_index_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+    ):
+        """Retain the former IDD plotting API for the fault-on area."""
+        return self.plot_fault_on_area_vs_weighted_controllers(
+            controller_analysis,
+            signal_analysis,
+        )
+
+    @staticmethod
+    def _stability_criteria_from(signal_analysis: SignalStudyAnalysis) -> StabilityCriteria:
+        """Return the common criteria from the first complete assessment."""
+        for result in signal_analysis.run_results:
+            if result.stability is not None:
+                return result.stability.criteria
+        raise ValueError(
+            "No post-fault assessments are available. "
+            "At least one run must pass initialization and reach the required duration."
+        )
+
+    def _plot_pre_fault_reference_area_vs_weighted_controllers(
+        self,
+        controller_analysis: ControllerStudyAnalysis,
+        signal_analysis: SignalStudyAnalysis,
+        *,
+        metric_attribute: str,
+        y_label: str,
+        title: str,
+    ):
+        """Plot one pre-fault-reference area against the weighted controls."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        weighted_points_by_run_id = {
+            point.run_id: point for point in controller_analysis.weighted_run_points
+        }
+        rows = [
+            (
+                weighted_points_by_run_id[result.run_id],
+                getattr(result.stability, metric_attribute),
+                result.stability.is_settled,
+            )
+            for result in signal_analysis.run_results
+            if result.stability is not None
+            and result.run_id in weighted_points_by_run_id
+        ]
+        if not rows:
+            raise ValueError("No runs contain both area and controller data.")
+
+        area_values = np.asarray([area for _, area, _ in rows], dtype=float)
+        maximum_area = float(area_values.max())
+        area_y_upper_limit = ceil(maximum_area * 10.0) / 10.0
+        figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
+        groups = (
+            (True, "Settled", "tab:green"),
+            (False, "Unsettled", "tab:red"),
+        )
+        dimensions = (
+            ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (2.0, 20.0)),
+            ("xi", "Power-weighted damping ratio, xi", (0.6, 1.0)),
+        )
+        for axis, (attribute, label, x_limits) in zip(axes, dimensions):
+            for is_settled, group_label, color in groups:
+                points = [row for row in rows if row[2] == is_settled]
+                axis.scatter(
+                    [getattr(point, attribute) for point, _, _ in points],
+                    [area for _, area, _ in points],
+                    color=color,
+                    s=20,
+                    alpha=0.7,
+                    label=group_label,
+                )
+            x_values = np.asarray(
+                [getattr(point, attribute) for point, _, _ in rows], dtype=float
+            )
+            linear_coefficients = np.polyfit(x_values, area_values, deg=1)
+            fitted_areas = np.polyval(linear_coefficients, x_values)
+            residual_sum = float(np.sum((area_values - fitted_areas) ** 2))
+            total_sum = float(np.sum((area_values - area_values.mean()) ** 2))
+            r_squared = 1.0 - residual_sum / total_sum if total_sum else 0.0
+            curve_x = np.linspace(x_values.min(), x_values.max(), 200)
+            axis.plot(
+                curve_x,
+                np.polyval(linear_coefficients, curve_x),
+                color="tab:blue",
+                linewidth=1.5,
+                label=f"Linear fit (R^2={r_squared:.3f})",
+            )
+            axis.set_xlabel(label)
+            axis.set_xlim(*x_limits)
+            axis.set_ylim(0.0, area_y_upper_limit)
+            axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="upper right")
+
+        axes[0].set_ylabel(y_label)
+        figure.suptitle(f"{title} vs. weighted parameters")
+        figure.tight_layout()
+        return figure
+
     @staticmethod
     def _split_controller_points(points):
         """Split controller points according to the requested design range."""
@@ -320,7 +635,7 @@ class MonteCarloAnalyzer:
                 edgecolor="tab:green",
                 alpha=0.12,
                 linewidth=1.5,
-                label="Design range: 2–50 Hz, 0.6–1.0",
+                label="Design range: 2-50 Hz, 0.6-1.0",
             )
         )
         axis.set_xlim(*FN_PLOT_LIMITS_HZ)
@@ -343,15 +658,7 @@ class MonteCarloAnalyzer:
         Stability is evaluated only when the run passes initialization. Each run's
         Parquet signal is read once for this analysis.
         """
-        initialization_criteria = initialization_criteria or InitializationCriteria(
-            evaluation_start_time_s=0.9,
-            evaluation_end_time_s=1.0,
-            reference_start_time_s=0.9,
-            reference_end_time_s=1.0,
-            relative_error_limit=0.01,
-            maximum_out_of_tolerance_fraction=0.01,
-            minimum_settled_duration_s=0.05,
-        )
+        initialization_criteria = initialization_criteria or InitializationCriteria()
         stability_criteria = stability_criteria or StabilityCriteria()
 
         run_results: list[RunSignalAnalysis] = []
@@ -370,14 +677,25 @@ class MonteCarloAnalyzer:
                     signal_values,
                     initialization_criteria,
                 )
-                stability = (
-                    assess_stability(time_values, signal_values, stability_criteria)
-                    if evaluate_stability and initialization.is_well_initialized
-                    else None
-                )
             except (KeyError, ValueError):
                 skipped_run_ids.append(run.run_id)
                 continue
+
+            stability = None
+            if evaluate_stability and initialization.is_well_initialized:
+                if time_values[-1] >= stability_criteria.minimum_simulation_end_time_s:
+                    try:
+                        stability = assess_stability(
+                            time_values,
+                            signal_values,
+                            stability_criteria,
+                            pre_fault_reference_value=initialization.reference_value,
+                        )
+                    except ValueError:
+                        skipped_run_ids.append(run.run_id)
+                        continue
+                # An initialized but short simulation is preserved and shown as
+                # not evaluated instead of being counted as a bad signal.
 
             run_results.append(
                 RunSignalAnalysis(
@@ -406,77 +724,245 @@ class MonteCarloAnalyzer:
         )
 
     def plot_initialization(self, analysis: SignalStudyAnalysis):
-        """Plot the signal from zero to one second by initialization result."""
+        """Plot pre-contingency signals colored by fast-oscillation severity."""
         import matplotlib.pyplot as plt
         import polars as pl
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import TwoSlopeNorm
 
         groups = (
-            ("Well-initialized runs", set(analysis.well_initialized_run_ids), "tab:blue"),
+            ("Well-initialized runs", set(analysis.well_initialized_run_ids)),
             (
-                "Unsettled initialization runs",
+                "Poorly initialized runs",
                 set(analysis.unsettled_initialization_run_ids),
-                "tab:red",
             ),
         )
         figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
-        for axis, (title, run_ids, color) in zip(axes, groups):
+        criteria = (
+            analysis.run_results[0].initialization.criteria
+            if analysis.run_results
+            else InitializationCriteria()
+        )
+        severity_by_run_id = {
+            result.run_id: result.initialization.fast_relative_error_percentile_99
+            for result in analysis.run_results
+        }
+        maximum_severity = max(
+            severity_by_run_id.values(),
+            default=criteria.maximum_fast_relative_error_percentile_99,
+        )
+        color_bar_maximum = _round_up_to_nice_number(
+            max(
+                maximum_severity,
+                criteria.maximum_fast_relative_error_percentile_99 * 1.01,
+            )
+            * 100
+        ) / 100
+        color_normalization = TwoSlopeNorm(
+            vmin=0.0,
+            vcenter=criteria.maximum_fast_relative_error_percentile_99,
+            vmax=color_bar_maximum,
+        )
+        color_map = plt.get_cmap("RdYlGn_r")
+        for axis, (title, run_ids) in zip(axes, groups):
+            axis.axvspan(
+                criteria.evaluation_start_time_s,
+                criteria.evaluation_end_time_s,
+                color="gold",
+                alpha=0.12,
+                label="Fast-oscillation window",
+            )
             for run in self.context.runs:
                 if run.run_id not in run_ids or run.dataset is None:
                     continue
 
                 data = run.dataset.read_series(analysis.signal_name).filter(
-                    (pl.col("time") >= 0.0) & (pl.col("time") < 1.0)
+                    (pl.col("time") >= 0.0)
+                    & (pl.col("time") < criteria.evaluation_end_time_s)
                 )
                 axis.plot(
                     data["time"],
                     data[analysis.signal_name],
-                    color=color,
-                    alpha=0.25,
+                    color=color_map(color_normalization(severity_by_run_id[run.run_id])),
+                    alpha=0.55,
                     linewidth=0.65,
                 )
             axis.set_title(f"{title} ({len(run_ids)} runs)")
-            axis.set_ylabel(analysis.signal_name)
+            axis.set_ylabel("Voltage (pu)")
+            axis.set_ylim(0.9, 1.1)
             axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="upper left")
 
         axes[-1].set_xlabel("Time (s)")
-        figure.suptitle(f"{analysis.signal_name}: initialization assessment")
-        figure.tight_layout()
+        axes[-1].set_xlim(0.0, 1.0)
+        color_bar = figure.colorbar(
+            ScalarMappable(norm=color_normalization, cmap=color_map),
+            ax=axes,
+            pad=0.015,
+        )
+        color_bar.set_label(
+            "Fast-oscillation P99 (% of reference voltage); "
+            f"acceptance limit: "
+            f"{criteria.maximum_fast_relative_error_percentile_99 * 100:.2f} %"
+        )
+        color_bar.set_ticks(
+            (
+                0.0,
+                criteria.maximum_fast_relative_error_percentile_99,
+                color_bar_maximum,
+            )
+        )
+        color_bar.set_ticklabels(
+            (
+                "0.00 % " + chr(10) + "(best)",
+                f"{criteria.maximum_fast_relative_error_percentile_99 * 100:.2f} % "
+                + chr(10) + "(limit)",
+                f"{color_bar_maximum * 100:.1f} % " + chr(10) + "(worst)",
+            )
+        )
+        figure.subplots_adjust(
+            left=0.09,
+            right=0.78,
+            bottom=0.08,
+            top=0.88,
+            hspace=0.14,
+        )
+        color_bar.ax.set_position((0.83, 0.14, 0.025, 0.70))
+        rejected_run_count = len(analysis.unsettled_initialization_run_ids)
+        figure.suptitle(
+            f"{analysis.signal_name}: initialization assessment" + chr(10)
+            + f"Fast-oscillation rejections: {rejected_run_count}"
+        )
         return figure
 
     def plot_stability(self, analysis: SignalStudyAnalysis):
-        """Plot post-clearance signals by their final-tail stability result."""
+        """Plot runs according to their post-fault recovery and final settlement."""
         import matplotlib.pyplot as plt
         import polars as pl
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
 
+        passing_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None
+            and result.stability.remains_above_voltage_threshold_after_evaluation
+            and result.stability.is_settled
+        }
+        evaluated_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None
+        }
         groups = (
-            ("Stable post-contingency runs", set(analysis.stable_run_ids), "tab:blue"),
             (
-                "Unsettled post-contingency runs",
-                set(analysis.unsettled_post_contingency_run_ids),
-                "tab:red",
+                "Pass 0.8 pu and final-settlement criteria",
+                passing_run_ids,
+            ),
+            (
+                "Fail at least one recovery or settlement criterion",
+                evaluated_run_ids - passing_run_ids,
             ),
         )
         figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
-        for axis, (title, run_ids, color) in zip(axes, groups):
+        completed_assessments = {
+            result.run_id: result.stability
+            for result in analysis.run_results
+            if result.stability is not None
+        }
+        criteria = next(
+            (assessment.criteria for assessment in completed_assessments.values()),
+            StabilityCriteria(),
+        )
+        severity_by_run_id = {
+            run_id: assessment.recovery_area_pu_s
+            for run_id, assessment in completed_assessments.items()
+        }
+        maximum_severity = max(
+            severity_by_run_id.values(),
+            default=0.0,
+        )
+        color_bar_maximum = ceil(max(maximum_severity, 0.01) * 10.0) / 10.0
+        color_normalization = Normalize(
+            vmin=0.0,
+            vmax=color_bar_maximum,
+        )
+        color_map = plt.get_cmap("RdYlGn_r")
+        recovery_end_time_s = criteria.response_area_end_time_s
+
+        for axis, (title, run_ids) in zip(axes, groups):
+            axis.axvspan(
+                criteria.clearance_time_s,
+                recovery_end_time_s,
+                color="gold",
+                alpha=0.10,
+                label="Recovery-area window",
+            )
+            axis.axhline(
+                criteria.post_evaluation_voltage_threshold_pu,
+                color="tab:orange",
+                linestyle="--",
+                linewidth=1.0,
+                label="0.8 pu",
+            )
+            axis.axhline(
+                0.7,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1.0,
+                label="0.7 pu",
+            )
             for run in self.context.runs:
                 if run.run_id not in run_ids or run.dataset is None:
                     continue
 
                 data = run.dataset.read_series(analysis.signal_name).filter(
-                    pl.col("time") >= 1.12
+                    (pl.col("time") >= 0.0)
+                    & (pl.col("time") <= POST_CONTINGENCY_PLOT_END_TIME_S)
                 )
                 axis.plot(
                     data["time"],
                     data[analysis.signal_name],
-                    color=color,
-                    alpha=0.25,
+                    color=color_map(
+                        color_normalization(severity_by_run_id[run.run_id])
+                    ),
+                    alpha=0.55,
                     linewidth=0.65,
                 )
             axis.set_title(f"{title} ({len(run_ids)} runs)")
-            axis.set_ylabel(analysis.signal_name)
+            axis.set_ylabel("Voltage (pu)")
+            axis.set_ylim(0.1, 1.3)
             axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="lower right")
 
         axes[-1].set_xlabel("Time (s)")
-        figure.suptitle(f"{analysis.signal_name}: post-contingency assessment")
-        figure.tight_layout()
+        axes[-1].set_xlim(0.0, POST_CONTINGENCY_PLOT_END_TIME_S)
+        color_bar = figure.colorbar(
+            ScalarMappable(norm=color_normalization, cmap=color_map),
+            ax=axes,
+            pad=0.015,
+        )
+        color_bar.set_label(
+            "Recovery absolute-voltage area (pu*s)"
+        )
+        color_bar.set_ticks((0.0, color_bar_maximum))
+        color_bar.set_ticklabels(
+            (
+                "0.0 pu*s " + chr(10) + "(best)",
+                f"{color_bar_maximum:.1f} pu*s " + chr(10) + "(worst)",
+            )
+        )
+        figure.subplots_adjust(
+            left=0.09,
+            right=0.78,
+            bottom=0.08,
+            top=0.88,
+            hspace=0.28,
+        )
+        color_bar.ax.set_position((0.83, 0.14, 0.025, 0.70))
+        figure.suptitle(
+            f"{analysis.signal_name}: recovery and final settlement" + chr(10)
+            + f"Color: recovery area from {criteria.clearance_time_s:.2f} to "
+            + f"{recovery_end_time_s:.2f} s"
+        )
         return figure
