@@ -25,6 +25,16 @@ class WeightedControllerParameters:
     unit_count: int
 
 
+@dataclass(frozen=True)
+class ActiveControllerParameters:
+    """Derived controller parameters for one active machine in a run."""
+
+    generator_name: str
+    fn_hz: float
+    xi: float
+    nominal_power_mva: float
+
+
 @dataclass
 class MonteCarloRun:
     """Represents one published simulation run."""
@@ -75,6 +85,28 @@ class MonteCarloRun:
         assets: "Assets",
     ) -> WeightedControllerParameters:
         """Calculate nominal-power-weighted fn and xi for this run."""
+        controllers = self.read_active_controller_parameters(assets)
+        total_nominal_power_mva = 0.0
+        weighted_fn_hz = 0.0
+        weighted_xi = 0.0
+
+        for controller in controllers:
+            total_nominal_power_mva += controller.nominal_power_mva
+            weighted_fn_hz += controller.nominal_power_mva * controller.fn_hz
+            weighted_xi += controller.nominal_power_mva * controller.xi
+
+        return WeightedControllerParameters(
+            fn_weighted_hz=weighted_fn_hz / total_nominal_power_mva,
+            xi_weighted=weighted_xi / total_nominal_power_mva,
+            total_nominal_power_mva=total_nominal_power_mva,
+            unit_count=len(controllers),
+        )
+
+    def read_active_controller_parameters(
+        self,
+        assets: "Assets",
+    ) -> list[ActiveControllerParameters]:
+        """Return fn and xi for every active machine in this run."""
         import polars as pl
 
         parameters = self.read_parameters()
@@ -93,36 +125,35 @@ class MonteCarloRun:
         if active_parameters.is_empty():
             raise ValueError(f"Run {self.run_id} has no active controller parameters.")
 
-        total_nominal_power_mva = 0.0
-        weighted_fn_hz = 0.0
-        weighted_xi = 0.0
+        controllers: list[ActiveControllerParameters] = []
         missing_assets: list[str] = []
-
         for parameter in active_parameters.iter_rows(named=True):
-            asset_name = str(parameter["GeneratorName"])
+            generator_name = str(parameter["GeneratorName"])
             try:
-                nominal_power_mva = assets.get_nominal_power_mva(asset_name)
+                nominal_power_mva = assets.get_nominal_power_mva(generator_name)
             except KeyError:
-                missing_assets.append(asset_name)
+                missing_assets.append(generator_name)
                 continue
 
             kp = float(parameter["Kp"])
             ki = float(parameter["Ki"])
             if ki <= 0.0:
                 raise ValueError(
-                    f"Run {self.run_id} has a non-positive Ki for {asset_name}."
+                    f"Run {self.run_id} has a non-positive Ki for {generator_name}."
                 )
             if nominal_power_mva <= 0.0:
                 raise ValueError(
-                    f"Asset {asset_name} has non-positive nominal power."
+                    f"Asset {generator_name} has non-positive nominal power."
                 )
 
-            fn_hz = sqrt(ki) / (2.0 * pi)
-            xi = kp / (2.0 * sqrt(ki))
-
-            total_nominal_power_mva += nominal_power_mva
-            weighted_fn_hz += nominal_power_mva * fn_hz
-            weighted_xi += nominal_power_mva * xi
+            controllers.append(
+                ActiveControllerParameters(
+                    generator_name=generator_name,
+                    fn_hz=sqrt(ki) / (2.0 * pi),
+                    xi=kp / (2.0 * sqrt(ki)),
+                    nominal_power_mva=nominal_power_mva,
+                )
+            )
 
         if missing_assets:
             missing_asset_names = ", ".join(sorted(set(missing_assets)))
@@ -130,12 +161,7 @@ class MonteCarloRun:
                 f"Run {self.run_id} has assets missing from the workbook: "
                 f"{missing_asset_names}"
             )
-        if total_nominal_power_mva == 0.0:
-            raise ValueError(f"Run {self.run_id} has no usable nominal power.")
+        if not controllers:
+            raise ValueError(f"Run {self.run_id} has no usable controller parameters.")
 
-        return WeightedControllerParameters(
-            fn_weighted_hz=weighted_fn_hz / total_nominal_power_mva,
-            xi_weighted=weighted_xi / total_nominal_power_mva,
-            total_nominal_power_mva=total_nominal_power_mva,
-            unit_count=active_parameters.height,
-        )
+        return controllers

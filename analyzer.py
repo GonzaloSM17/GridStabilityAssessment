@@ -15,6 +15,51 @@ from signal_analysis import (
 )
 
 
+FN_PLOT_LIMITS_HZ = (0.0, 60.0)
+XI_PLOT_LIMITS = (0.0, 1.1)
+DESIGN_FN_RANGE_HZ = (2.0, 50.0)
+DESIGN_XI_RANGE = (0.6, 1.0)
+
+
+@dataclass(frozen=True)
+class ControllerPoint:
+    """One active machine controller represented in fn-xi space."""
+
+    run_id: int
+    generator_name: str
+    fn_hz: float
+    xi: float
+    nominal_power_mva: float
+
+
+@dataclass(frozen=True)
+class WeightedControllerPoint:
+    """One run represented by its nominal-power-weighted controller point."""
+
+    run_id: int
+    fn_hz: float
+    xi: float
+    total_nominal_power_mva: float
+    unit_count: int
+
+
+@dataclass(frozen=True)
+class ControllerStudyAnalysis:
+    """Individual and weighted controller points across a Monte Carlo study."""
+
+    controller_points: tuple[ControllerPoint, ...]
+    weighted_run_points: tuple[WeightedControllerPoint, ...]
+    skipped_run_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class MonteCarloStudyAnalysis:
+    """Results produced by one complete analyzer execution."""
+
+    controller_analysis: ControllerStudyAnalysis | None
+    signal_analysis: "SignalStudyAnalysis | None"
+
+
 @dataclass(frozen=True)
 class RunSignalAnalysis:
     """Analysis results for one signal in one Monte Carlo run."""
@@ -103,6 +148,188 @@ class MonteCarloAnalyzer:
             return None
 
         return cls.from_paths(context_path, assets_path)
+
+    def analyze(
+        self,
+        signal_name: str | None = None,
+        initialization_criteria: InitializationCriteria | None = None,
+        stability_criteria: StabilityCriteria | None = None,
+        include_controllers: bool = True,
+    ) -> MonteCarloStudyAnalysis:
+        """Run the selected study analyses and return their consolidated results.
+
+        Controller analysis is independent of signal analysis. When a signal is
+        supplied, its initialization is assessed first and stability is assessed
+        only for runs that pass that initialization assessment.
+        """
+        controller_analysis = (
+            self.analyze_controllers() if include_controllers else None
+        )
+        signal_analysis = (
+            self.analyze_signal(
+                signal_name,
+                initialization_criteria=initialization_criteria,
+                stability_criteria=stability_criteria,
+            )
+            if signal_name is not None
+            else None
+        )
+        return MonteCarloStudyAnalysis(
+            controller_analysis=controller_analysis,
+            signal_analysis=signal_analysis,
+        )
+
+    def analyze_controllers(self) -> ControllerStudyAnalysis:
+        """Collect individual and nominal-power-weighted controller points."""
+        if self.assets is None:
+            raise ValueError("Controller analysis requires an Assets workbook.")
+
+        controller_points: list[ControllerPoint] = []
+        weighted_run_points: list[WeightedControllerPoint] = []
+        skipped_run_ids: list[int] = []
+
+        for run in self.context.runs:
+            try:
+                controllers = run.read_active_controller_parameters(self.assets)
+            except (FileNotFoundError, KeyError, ValueError):
+                skipped_run_ids.append(run.run_id)
+                continue
+
+            total_nominal_power_mva = sum(
+                controller.nominal_power_mva for controller in controllers
+            )
+            weighted_fn_hz = sum(
+                controller.nominal_power_mva * controller.fn_hz
+                for controller in controllers
+            ) / total_nominal_power_mva
+            weighted_xi = sum(
+                controller.nominal_power_mva * controller.xi
+                for controller in controllers
+            ) / total_nominal_power_mva
+
+            controller_points.extend(
+                ControllerPoint(
+                    run_id=run.run_id,
+                    generator_name=controller.generator_name,
+                    fn_hz=controller.fn_hz,
+                    xi=controller.xi,
+                    nominal_power_mva=controller.nominal_power_mva,
+                )
+                for controller in controllers
+            )
+            weighted_run_points.append(
+                WeightedControllerPoint(
+                    run_id=run.run_id,
+                    fn_hz=weighted_fn_hz,
+                    xi=weighted_xi,
+                    total_nominal_power_mva=total_nominal_power_mva,
+                    unit_count=len(controllers),
+                )
+            )
+
+        return ControllerStudyAnalysis(
+            controller_points=tuple(controller_points),
+            weighted_run_points=tuple(weighted_run_points),
+            skipped_run_ids=tuple(skipped_run_ids),
+        )
+
+    def plot_controller_population(self, analysis: ControllerStudyAnalysis):
+        """Plot one fn-xi point per active machine across every run."""
+        figure, axis = self._create_controller_figure(
+            "Controller population across all active machines"
+        )
+        inside_points, outside_points = self._split_controller_points(
+            analysis.controller_points
+        )
+        axis.scatter(
+            [point.fn_hz for point in inside_points],
+            [point.xi for point in inside_points],
+            s=8,
+            color="tab:blue",
+            alpha=0.18,
+            label="Inside design range",
+        )
+        axis.scatter(
+            [point.fn_hz for point in outside_points],
+            [point.xi for point in outside_points],
+            s=12,
+            color="tab:red",
+            alpha=0.6,
+            label="Outside design range",
+        )
+        axis.legend(loc="upper right")
+        figure.tight_layout()
+        return figure
+
+    def plot_weighted_controllers(self, analysis: ControllerStudyAnalysis):
+        """Plot one nominal-power-weighted fn-xi point per Monte Carlo run."""
+        figure, axis = self._create_controller_figure(
+            "Nominal-power-weighted controller point by run"
+        )
+        inside_points, outside_points = self._split_controller_points(
+            analysis.weighted_run_points
+        )
+        axis.scatter(
+            [point.fn_hz for point in inside_points],
+            [point.xi for point in inside_points],
+            s=22,
+            color="tab:blue",
+            alpha=0.6,
+            label="Inside design range",
+        )
+        axis.scatter(
+            [point.fn_hz for point in outside_points],
+            [point.xi for point in outside_points],
+            s=28,
+            color="tab:red",
+            alpha=0.8,
+            label="Outside design range",
+        )
+        axis.legend(loc="upper right")
+        figure.tight_layout()
+        return figure
+
+    @staticmethod
+    def _split_controller_points(points):
+        """Split controller points according to the requested design range."""
+        inside_points = []
+        outside_points = []
+        for point in points:
+            if (
+                DESIGN_FN_RANGE_HZ[0] <= point.fn_hz <= DESIGN_FN_RANGE_HZ[1]
+                and DESIGN_XI_RANGE[0] <= point.xi <= DESIGN_XI_RANGE[1]
+            ):
+                inside_points.append(point)
+            else:
+                outside_points.append(point)
+        return inside_points, outside_points
+
+    @staticmethod
+    def _create_controller_figure(title: str):
+        """Create the shared fn-xi figure with its design-range frame."""
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+
+        figure, axis = plt.subplots(figsize=(10, 7))
+        axis.add_patch(
+            Rectangle(
+                (DESIGN_FN_RANGE_HZ[0], DESIGN_XI_RANGE[0]),
+                DESIGN_FN_RANGE_HZ[1] - DESIGN_FN_RANGE_HZ[0],
+                DESIGN_XI_RANGE[1] - DESIGN_XI_RANGE[0],
+                facecolor="tab:green",
+                edgecolor="tab:green",
+                alpha=0.12,
+                linewidth=1.5,
+                label="Design range: 2–50 Hz, 0.6–1.0",
+            )
+        )
+        axis.set_xlim(*FN_PLOT_LIMITS_HZ)
+        axis.set_ylim(*XI_PLOT_LIMITS)
+        axis.set_xlabel("Natural frequency, fn (Hz)")
+        axis.set_ylabel("Damping ratio, xi")
+        axis.set_title(title)
+        axis.grid(visible=True, alpha=0.3)
+        return figure, axis
 
     def analyze_signal(
         self,
