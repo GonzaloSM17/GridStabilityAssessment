@@ -3,31 +3,11 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from signal_analysis import (
-    InitializationAssessment,
-    InitializationCriteria,
-    StabilityAssessment,
-    StabilityCriteria,
-    assess_initialization,
-    assess_stability,
-)
-
-
 @dataclass
 class TimeSeries:
     """Represents one named signal in a time-series dataset."""
 
     name: str
-
-
-@dataclass
-class SignalDeviation:
-    """Maximum absolute deviation of one signal within a time window."""
-
-    max_absolute_delta: float
-    signed_delta_at_peak: float
-    peak_time_s: float
-    reference_value: float
 
 
 @dataclass
@@ -89,75 +69,3 @@ class TimeSeriesDataset:
             .collect()
         )
 
-    def calculate_max_absolute_delta(
-        self,
-        signal_name: str,
-        start_time: float,
-        end_time: float,
-        reference_time: float = 0.0,
-    ) -> SignalDeviation:
-        """Calculate a signal's largest absolute delta within a time window."""
-        if start_time > end_time:
-            raise ValueError("start_time must not be greater than end_time.")
-
-        import polars as pl
-
-        data = self.read_series(signal_name)
-        reference_rows = data.filter(pl.col("time") == reference_time)
-        if reference_rows.is_empty():
-            raise ValueError(
-                f"Reference time {reference_time} is not present for {signal_name}."
-            )
-
-        reference_value = float(reference_rows[signal_name][0])
-        window = data.filter(
-            (pl.col("time") >= start_time) & (pl.col("time") <= end_time)
-        )
-        if window.is_empty():
-            raise ValueError(
-                f"No samples for {signal_name} between {start_time} and {end_time} s."
-            )
-
-        delta_column = "_delta"
-        absolute_delta_column = "_absolute_delta"
-        peak = (
-            window.with_columns(
-                (pl.col(signal_name) - reference_value).alias(delta_column)
-            )
-            .with_columns(pl.col(delta_column).abs().alias(absolute_delta_column))
-            .sort(absolute_delta_column, descending=True)
-            .row(0, named=True)
-        )
-
-        return SignalDeviation(
-            max_absolute_delta=float(peak[absolute_delta_column]),
-            signed_delta_at_peak=float(peak[delta_column]),
-            peak_time_s=float(peak["time"]),
-            reference_value=reference_value,
-        )
-
-    def evaluate_initialization(
-        self,
-        signal_name: str,
-        criteria: InitializationCriteria | None = None,
-    ) -> InitializationAssessment:
-        """Evaluate whether a signal settles before the contingency begins."""
-        data = self.read_series(signal_name)
-        return assess_initialization(
-            data["time"].to_list(),
-            data[signal_name].to_list(),
-            criteria,
-        )
-
-    def evaluate_stability(
-        self,
-        signal_name: str,
-        criteria: StabilityCriteria | None = None,
-    ) -> StabilityAssessment:
-        """Evaluate whether a signal settles after the contingency clearance."""
-        data = self.read_series(signal_name)
-        return assess_stability(
-            data["time"].to_list(),
-            data[signal_name].to_list(),
-            criteria,
-        )

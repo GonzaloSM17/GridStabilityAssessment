@@ -15,16 +15,6 @@ if TYPE_CHECKING:
 RUN_DIRECTORY_PATTERN = re.compile(r"run_(\d{6})$")
 
 
-@dataclass
-class WeightedControllerParameters:
-    """Power-weighted controller parameters for one simulation run."""
-
-    fn_weighted_hz: float
-    xi_weighted: float
-    total_nominal_power_mva: float
-    unit_count: int
-
-
 @dataclass(frozen=True)
 class ActiveControllerParameters:
     """Derived controller parameters for one active machine in a run."""
@@ -79,28 +69,6 @@ class MonteCarloRun:
         import polars as pl
 
         return pl.read_csv(parameters_path, separator=";")
-
-    def calculate_weighted_controller_parameters(
-        self,
-        assets: "Assets",
-    ) -> WeightedControllerParameters:
-        """Calculate nominal-power-weighted fn and xi for this run."""
-        controllers = self.read_active_controller_parameters(assets)
-        total_nominal_power_mva = 0.0
-        weighted_fn_hz = 0.0
-        weighted_xi = 0.0
-
-        for controller in controllers:
-            total_nominal_power_mva += controller.nominal_power_mva
-            weighted_fn_hz += controller.nominal_power_mva * controller.fn_hz
-            weighted_xi += controller.nominal_power_mva * controller.xi
-
-        return WeightedControllerParameters(
-            fn_weighted_hz=weighted_fn_hz / total_nominal_power_mva,
-            xi_weighted=weighted_xi / total_nominal_power_mva,
-            total_nominal_power_mva=total_nominal_power_mva,
-            unit_count=len(controllers),
-        )
 
     def read_active_controller_parameters(
         self,

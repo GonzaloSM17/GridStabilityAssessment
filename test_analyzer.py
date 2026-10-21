@@ -2,7 +2,7 @@
 
 import unittest
 
-from analyzer import MonteCarloAnalyzer, SignalStudyAnalysis, _round_up_to_nice_number
+from analyzer import AnalysisPipeline, SignalStudyAnalysis, _round_up_to_nice_number
 
 
 class NiceNumberTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class NoPostFaultAssessmentTests(unittest.TestCase):
 
     def test_controller_area_plots_report_a_clear_error_without_assessments(self):
         with self.assertRaisesRegex(ValueError, "No post-fault assessments"):
-            MonteCarloAnalyzer._stability_criteria_from(self.analysis)
+            AnalysisPipeline._stability_criteria_from(self.analysis)
 
 
 if __name__ == "__main__":

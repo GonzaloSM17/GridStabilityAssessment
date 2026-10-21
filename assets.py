@@ -26,25 +26,6 @@ class Assets:
         except KeyError as error:
             raise KeyError(f"Asset not found in the Assets workbook: {asset_name}") from error
 
-    @staticmethod
-    def choose_workbook() -> Path | None:
-        """Open a Tk file picker without reading the Assets workbook."""
-        from tkinter import Tk, filedialog
-
-        window = Tk()
-        window.withdraw()
-        window.attributes("-topmost", True)
-
-        try:
-            selected_path = filedialog.askopenfilename(
-                title="Select the EMTP Assets workbook",
-                filetypes=[("Excel workbooks", "*.xlsx")],
-            )
-        finally:
-            window.destroy()
-
-        return Path(selected_path) if selected_path else None
-
     def _read_nominal_powers(self) -> dict[str, float]:
         from openpyxl import load_workbook
 

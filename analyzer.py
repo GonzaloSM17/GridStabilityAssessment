@@ -1,12 +1,8 @@
-"""Study-level signal analysis built on a Monte Carlo context."""
+"""Analysis pipeline for controller and bus-measurement results."""
 
 from dataclasses import dataclass
 from math import sqrt
 from math import ceil, floor, log10
-from pathlib import Path
-
-from assets import Assets
-from context import MonteCarloContext
 from signal_analysis import (
     InitializationAssessment,
     InitializationCriteria,
@@ -15,6 +11,8 @@ from signal_analysis import (
     assess_initialization,
     assess_stability,
 )
+from signals import Measurement, VOLTAGE_RMS
+from study import MonteCarloStudy
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
@@ -26,7 +24,7 @@ POST_CONTINGENCY_PLOT_END_TIME_S = 5.0
 
 
 def natural_frequency_from_bandwidth(bandwidth_hz: float, xi: float) -> float:
-    """Return fn for a second-order closed-loop -3 dB bandwidth and damping."""
+    """Return fn from bandwidth and xi using the selected bandwidth relation."""
     if bandwidth_hz <= 0.0:
         raise ValueError("Bandwidth must be positive.")
     if xi < 0.0:
@@ -34,8 +32,8 @@ def natural_frequency_from_bandwidth(bandwidth_hz: float, xi: float) -> float:
 
     bandwidth_ratio = sqrt(
         1.0
-        - 2.0 * xi**2
-        + sqrt(4.0 * xi**4 - 4.0 * xi**2 + 2.0)
+        + 2.0 * xi**2
+        + sqrt((1.0 + 2.0 * xi**2) ** 2 + 1.0)
     )
     return bandwidth_hz / bandwidth_ratio
 
@@ -86,14 +84,6 @@ class ControllerStudyAnalysis:
 
 
 @dataclass(frozen=True)
-class MonteCarloStudyAnalysis:
-    """Results produced by one complete analyzer execution."""
-
-    controller_analysis: ControllerStudyAnalysis | None
-    signal_analysis: "SignalStudyAnalysis | None"
-
-
-@dataclass(frozen=True)
 class RunSignalAnalysis:
     """Analysis results for one signal in one Monte Carlo run."""
 
@@ -109,6 +99,7 @@ class SignalStudyAnalysis:
     signal_name: str
     run_results: tuple[RunSignalAnalysis, ...]
     skipped_run_ids: tuple[int, ...]
+    frequency_signal_name: str | None = None
 
     @property
     def well_initialized_run_ids(self) -> tuple[int, ...]:
@@ -181,70 +172,21 @@ class SignalStudyAnalysis:
         )
 
 
-class MonteCarloAnalyzer:
-    """Analyze a selected signal across one Monte Carlo study."""
+class AnalysisPipeline:
+    """Execute reusable analyses for one fully configured Monte Carlo study."""
 
-    def __init__(
-        self,
-        context: MonteCarloContext,
-        assets: Assets | None = None,
-    ) -> None:
-        self.context = context
-        self.assets = assets
+    def __init__(self, study: MonteCarloStudy) -> None:
+        self.study = study
 
-    @classmethod
-    def from_paths(
-        cls,
-        context_path: str | Path | None,
-        assets_path: str | Path | None = None,
-    ) -> "MonteCarloAnalyzer":
-        """Create an analyzer from the study and optional Assets workbook paths."""
-        context = MonteCarloContext(context_path)
-        assets = Assets(assets_path) if assets_path is not None else None
-        return cls(context, assets)
+    @property
+    def context(self):
+        """Expose the study context to existing analysis and plot operations."""
+        return self.study.context
 
-    @classmethod
-    def select_inputs(cls) -> "MonteCarloAnalyzer | None":
-        """Request both input paths before loading either study input."""
-        context_path = MonteCarloContext.choose_directory()
-        if context_path is None:
-            return None
-
-        assets_path = Assets.choose_workbook()
-        if assets_path is None:
-            return None
-
-        return cls.from_paths(context_path, assets_path)
-
-    def analyze(
-        self,
-        signal_name: str | None = None,
-        initialization_criteria: InitializationCriteria | None = None,
-        stability_criteria: StabilityCriteria | None = None,
-        include_controllers: bool = True,
-    ) -> MonteCarloStudyAnalysis:
-        """Run the selected study analyses and return their consolidated results.
-
-        Controller analysis is independent of signal analysis. When a signal is
-        supplied, its initialization is assessed first and stability is assessed
-        only for runs that pass that initialization assessment.
-        """
-        controller_analysis = (
-            self.analyze_controllers() if include_controllers else None
-        )
-        signal_analysis = (
-            self.analyze_signal(
-                signal_name,
-                initialization_criteria=initialization_criteria,
-                stability_criteria=stability_criteria,
-            )
-            if signal_name is not None
-            else None
-        )
-        return MonteCarloStudyAnalysis(
-            controller_analysis=controller_analysis,
-            signal_analysis=signal_analysis,
-        )
+    @property
+    def assets(self):
+        """Expose the study Assets metadata to controller analysis."""
+        return self.study.assets
 
     def analyze_controllers(self) -> ControllerStudyAnalysis:
         """Collect individual and nominal-power-weighted controller points."""
@@ -687,18 +629,23 @@ class MonteCarloAnalyzer:
         return figure, axis
 
 
-    def analyze_signal(
+    def analyze_measurement(
         self,
-        signal_name: str,
+        measurement: Measurement,
         initialization_criteria: InitializationCriteria | None = None,
         stability_criteria: StabilityCriteria | None = None,
-        evaluate_stability: bool = True,
     ) -> SignalStudyAnalysis:
-        """Run initialization and post-clearance analysis for one signal.
+        """Analyze the currently supported RMS-voltage measurement.
 
         Stability is evaluated only when the run passes initialization. Each run's
         Parquet signal is read once for this analysis.
         """
+        if measurement.kind != VOLTAGE_RMS:
+            raise ValueError(
+                "Only RMS-voltage measurements support the current assessment."
+            )
+
+        signal_name = measurement.column_name
         initialization_criteria = initialization_criteria or InitializationCriteria()
         stability_criteria = stability_criteria or StabilityCriteria()
 
@@ -723,7 +670,7 @@ class MonteCarloAnalyzer:
                 continue
 
             stability = None
-            if evaluate_stability and initialization.is_well_initialized:
+            if initialization.is_well_initialized:
                 if time_values[-1] >= stability_criteria.minimum_simulation_end_time_s:
                     try:
                         stability = assess_stability(
@@ -750,18 +697,7 @@ class MonteCarloAnalyzer:
             signal_name=signal_name,
             run_results=tuple(run_results),
             skipped_run_ids=tuple(skipped_run_ids),
-        )
-
-    def analyze_initialization(
-        self,
-        signal_name: str,
-        criteria: InitializationCriteria | None = None,
-    ) -> SignalStudyAnalysis:
-        """Run only the initialization assessment for one signal."""
-        return self.analyze_signal(
-            signal_name,
-            initialization_criteria=criteria,
-            evaluate_stability=False,
+            frequency_signal_name=f"{measurement.source_name}/Frequency_Meter/f",
         )
 
     def plot_initialization(self, analysis: SignalStudyAnalysis):
@@ -778,7 +714,7 @@ class MonteCarloAnalyzer:
                 set(analysis.unsettled_initialization_run_ids),
             ),
         )
-        figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
+        figure, axes = plt.subplots(2, 2, figsize=(16, 9), sharex="col")
         criteria = (
             analysis.run_results[0].initialization.criteria
             if analysis.run_results
@@ -805,8 +741,17 @@ class MonteCarloAnalyzer:
             vmax=color_bar_maximum,
         )
         color_map = plt.get_cmap("RdYlGn_r")
-        for axis, (title, run_ids) in zip(axes, groups):
-            axis.axvspan(
+        for row_index, (title, run_ids) in enumerate(groups):
+            voltage_axis = axes[row_index, 0]
+            frequency_axis = axes[row_index, 1]
+            voltage_axis.axvspan(
+                criteria.evaluation_start_time_s,
+                criteria.evaluation_end_time_s,
+                color="gold",
+                alpha=0.12,
+                label="Fast-oscillation window",
+            )
+            frequency_axis.axvspan(
                 criteria.evaluation_start_time_s,
                 criteria.evaluation_end_time_s,
                 color="gold",
@@ -821,24 +766,51 @@ class MonteCarloAnalyzer:
                     (pl.col("time") >= 0.0)
                     & (pl.col("time") < criteria.evaluation_end_time_s)
                 )
-                axis.plot(
+                color = color_map(color_normalization(severity_by_run_id[run.run_id]))
+                voltage_axis.plot(
                     data["time"],
                     data[analysis.signal_name],
-                    color=color_map(color_normalization(severity_by_run_id[run.run_id])),
+                    color=color,
                     alpha=0.55,
                     linewidth=0.65,
                 )
-            axis.set_title(f"{title} ({len(run_ids)} runs)")
-            axis.set_ylabel("Voltage (pu)")
-            axis.set_ylim(0.9, 1.1)
-            axis.grid(visible=True, alpha=0.3)
-            axis.legend(loc="upper left")
+                if analysis.frequency_signal_name is None:
+                    continue
+                try:
+                    frequency_data = run.dataset.read_series(
+                        analysis.frequency_signal_name
+                    ).filter(
+                        (pl.col("time") >= 0.0)
+                        & (pl.col("time") < criteria.evaluation_end_time_s)
+                    )
+                except (KeyError, ValueError):
+                    continue
+                frequency_axis.plot(
+                    frequency_data["time"],
+                    frequency_data[analysis.frequency_signal_name],
+                    color=color,
+                    alpha=0.55,
+                    linewidth=0.65,
+                )
 
-        axes[-1].set_xlabel("Time (s)")
-        axes[-1].set_xlim(0.0, 1.0)
+            voltage_axis.set_title(f"{title} — voltage ({len(run_ids)} runs)")
+            voltage_axis.set_ylabel("Voltage (pu)")
+            voltage_axis.set_ylim(0.9, 1.1)
+            voltage_axis.grid(visible=True, alpha=0.3)
+            voltage_axis.legend(loc="upper left")
+
+            frequency_axis.set_title(f"{title} — frequency ({len(run_ids)} runs)")
+            frequency_axis.set_ylabel("Frequency (Hz)")
+            frequency_axis.grid(visible=True, alpha=0.3)
+            frequency_axis.legend(loc="upper left")
+
+        for axis in axes[-1]:
+            axis.set_xlabel("Time (s)")
+        for axis in axes.flat:
+            axis.set_xlim(0.0, 1.0)
         color_bar = figure.colorbar(
             ScalarMappable(norm=color_normalization, cmap=color_map),
-            ax=axes,
+            ax=axes.ravel().tolist(),
             pad=0.015,
         )
         color_bar.set_label(
@@ -863,12 +835,13 @@ class MonteCarloAnalyzer:
         )
         figure.subplots_adjust(
             left=0.09,
-            right=0.78,
+            right=0.88,
             bottom=0.08,
             top=0.88,
             hspace=0.14,
+            wspace=0.22,
         )
-        color_bar.ax.set_position((0.83, 0.14, 0.025, 0.70))
+        color_bar.ax.set_position((0.91, 0.14, 0.018, 0.70))
         rejected_run_count = len(analysis.unsettled_initialization_run_ids)
         figure.suptitle(
             f"{analysis.signal_name}: initialization assessment" + chr(10)
@@ -876,7 +849,7 @@ class MonteCarloAnalyzer:
         )
         return figure
 
-    def plot_stability(self, analysis: SignalStudyAnalysis):
+    def plot_voltage_stability(self, analysis: SignalStudyAnalysis):
         """Plot runs according to their post-fault recovery and final settlement."""
         import matplotlib.pyplot as plt
         import polars as pl
@@ -905,7 +878,7 @@ class MonteCarloAnalyzer:
                 evaluated_run_ids - passing_run_ids,
             ),
         )
-        figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
+        figure, axes = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
         completed_assessments = {
             result.run_id: result.stability
             for result in analysis.run_results
@@ -932,21 +905,22 @@ class MonteCarloAnalyzer:
         recovery_end_time_s = criteria.response_area_end_time_s
 
         for axis, (title, run_ids) in zip(axes, groups):
-            axis.axvspan(
+            voltage_axis = axis
+            voltage_axis.axvspan(
                 criteria.clearance_time_s,
                 recovery_end_time_s,
                 color="gold",
                 alpha=0.10,
                 label="Recovery-area window",
             )
-            axis.axhline(
+            voltage_axis.axhline(
                 criteria.post_evaluation_voltage_threshold_pu,
                 color="tab:orange",
                 linestyle="--",
                 linewidth=1.0,
                 label="0.8 pu",
             )
-            axis.axhline(
+            voltage_axis.axhline(
                 0.7,
                 color="tab:red",
                 linestyle="--",
@@ -961,20 +935,21 @@ class MonteCarloAnalyzer:
                     (pl.col("time") >= 0.0)
                     & (pl.col("time") <= POST_CONTINGENCY_PLOT_END_TIME_S)
                 )
-                axis.plot(
+                color = color_map(
+                    color_normalization(severity_by_run_id[run.run_id])
+                )
+                voltage_axis.plot(
                     data["time"],
                     data[analysis.signal_name],
-                    color=color_map(
-                        color_normalization(severity_by_run_id[run.run_id])
-                    ),
+                    color=color,
                     alpha=0.55,
                     linewidth=0.65,
                 )
-            axis.set_title(f"{title} ({len(run_ids)} runs)")
-            axis.set_ylabel("Voltage (pu)")
-            axis.set_ylim(0.1, 1.3)
-            axis.grid(visible=True, alpha=0.3)
-            axis.legend(loc="lower right")
+            voltage_axis.set_title(f"{title} — voltage ({len(run_ids)} runs)")
+            voltage_axis.set_ylabel("Voltage (pu)")
+            voltage_axis.set_ylim(0.1, 1.3)
+            voltage_axis.grid(visible=True, alpha=0.3)
+            voltage_axis.legend(loc="lower right")
 
         axes[-1].set_xlabel("Time (s)")
         axes[-1].set_xlim(0.0, POST_CONTINGENCY_PLOT_END_TIME_S)
@@ -1006,4 +981,87 @@ class MonteCarloAnalyzer:
             + f"Color: recovery area from {criteria.clearance_time_s:.2f} to "
             + f"{recovery_end_time_s:.2f} s"
         )
+        return figure
+
+    def plot_frequency_by_voltage_stability(self, analysis: SignalStudyAnalysis):
+        """Plot frequency using the stability groups established from RMS voltage."""
+        if analysis.frequency_signal_name is None:
+            raise ValueError("The voltage analysis has no associated frequency signal.")
+
+        import matplotlib.pyplot as plt
+        import polars as pl
+
+        passing_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None
+            and result.stability.remains_above_voltage_threshold_after_evaluation
+            and result.stability.is_settled
+        }
+        evaluated_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None
+        }
+        groups = (
+            (
+                "Pass voltage-stability criteria",
+                passing_run_ids,
+                "tab:green",
+            ),
+            (
+                "Fail at least one voltage-stability criterion",
+                evaluated_run_ids - passing_run_ids,
+                "tab:red",
+            ),
+        )
+        criteria = next(
+            (
+                result.stability.criteria
+                for result in analysis.run_results
+                if result.stability is not None
+            ),
+            StabilityCriteria(),
+        )
+
+        figure, axes = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
+        for axis, (title, run_ids, color) in zip(axes, groups):
+            axis.axvspan(
+                criteria.clearance_time_s,
+                criteria.response_area_end_time_s,
+                color="gold",
+                alpha=0.10,
+                label="Voltage recovery-area window",
+            )
+            for run in self.context.runs:
+                if run.run_id not in run_ids or run.dataset is None:
+                    continue
+                try:
+                    data = run.dataset.read_series(
+                        analysis.frequency_signal_name
+                    ).filter(
+                        (pl.col("time") >= 0.0)
+                        & (pl.col("time") <= POST_CONTINGENCY_PLOT_END_TIME_S)
+                    )
+                except (KeyError, ValueError):
+                    continue
+                axis.plot(
+                    data["time"],
+                    data[analysis.frequency_signal_name],
+                    color=color,
+                    alpha=0.35,
+                    linewidth=0.65,
+                )
+
+            axis.set_title(f"{title} ({len(run_ids)} runs)")
+            axis.set_ylabel("Frequency (Hz)")
+            axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="lower right")
+
+        axes[-1].set_xlabel("Time (s)")
+        axes[-1].set_xlim(0.0, POST_CONTINGENCY_PLOT_END_TIME_S)
+        figure.suptitle(
+            f"{analysis.frequency_signal_name}: grouped by voltage stability"
+        )
+        figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
         return figure
