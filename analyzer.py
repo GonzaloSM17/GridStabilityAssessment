@@ -1,6 +1,7 @@
 """Study-level signal analysis built on a Monte Carlo context."""
 
 from dataclasses import dataclass
+from math import sqrt
 from math import ceil, floor, log10
 from pathlib import Path
 
@@ -20,7 +21,23 @@ FN_PLOT_LIMITS_HZ = (0.0, 60.0)
 XI_PLOT_LIMITS = (0.4, 1.1)
 DESIGN_FN_RANGE_HZ = (2.0, 50.0)
 DESIGN_XI_RANGE = (0.6, 1.0)
+BANDWIDTH_RANGE_HZ = (5.0, 10.0)
 POST_CONTINGENCY_PLOT_END_TIME_S = 5.0
+
+
+def natural_frequency_from_bandwidth(bandwidth_hz: float, xi: float) -> float:
+    """Return fn for a second-order closed-loop -3 dB bandwidth and damping."""
+    if bandwidth_hz <= 0.0:
+        raise ValueError("Bandwidth must be positive.")
+    if xi < 0.0:
+        raise ValueError("Damping ratio xi cannot be negative.")
+
+    bandwidth_ratio = sqrt(
+        1.0
+        - 2.0 * xi**2
+        + sqrt(4.0 * xi**4 - 4.0 * xi**2 + 2.0)
+    )
+    return bandwidth_hz / bandwidth_ratio
 
 
 def _round_up_to_nice_number(value: float) -> float:
@@ -621,7 +638,7 @@ class MonteCarloAnalyzer:
 
     @staticmethod
     def _create_controller_figure(title: str):
-        """Create the shared fn-xi figure with its design-range frame."""
+        """Create the shared fn-xi figure with design and bandwidth regions."""
         import matplotlib.pyplot as plt
         from matplotlib.patches import Rectangle
 
@@ -638,6 +655,29 @@ class MonteCarloAnalyzer:
                 label="Design range: 2-50 Hz, 0.6-1.0",
             )
         )
+        xi_values = [
+            DESIGN_XI_RANGE[0]
+            + (DESIGN_XI_RANGE[1] - DESIGN_XI_RANGE[0]) * index / 100.0
+            for index in range(101)
+        ]
+        lower_bandwidth_fn = [
+            natural_frequency_from_bandwidth(BANDWIDTH_RANGE_HZ[0], xi)
+            for xi in xi_values
+        ]
+        upper_bandwidth_fn = [
+            natural_frequency_from_bandwidth(BANDWIDTH_RANGE_HZ[1], xi)
+            for xi in xi_values
+        ]
+        axis.fill_betweenx(
+            xi_values,
+            lower_bandwidth_fn,
+            upper_bandwidth_fn,
+            color="tab:orange",
+            alpha=0.14,
+            label="Bandwidth range: 5-10 Hz",
+        )
+        axis.plot(lower_bandwidth_fn, xi_values, color="tab:orange", linewidth=1.5)
+        axis.plot(upper_bandwidth_fn, xi_values, color="tab:orange", linewidth=1.5)
         axis.set_xlim(*FN_PLOT_LIMITS_HZ)
         axis.set_ylim(*XI_PLOT_LIMITS)
         axis.set_xlabel("Natural frequency, fn (Hz)")
@@ -645,6 +685,7 @@ class MonteCarloAnalyzer:
         axis.set_title(title)
         axis.grid(visible=True, alpha=0.3)
         return figure, axis
+
 
     def analyze_signal(
         self,
