@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from analyzer import AnalysisPipeline
+from analyzer import AnalysisPipeline, BusStudyAnalysis, StudyAnalysis
 from assets import Assets
 from context import MonteCarloContext
 from reports import AnalysisReport
@@ -96,58 +96,57 @@ class MonteCarloWorkbench:
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 
-    def analyze_voltage_rms(self, bus_name: str, *, show_figures: bool = True):
-        """Run and publish the current RMS-voltage analysis for one bus.
-
-        Controller figures are study-wide and are generated once per execution.
-        Frequency is published only as a complementary trace for the selected bus;
-        it is not part of the RMS-voltage assessment.
-        """
+    def analyze(
+        self,
+        *,
+        buses: tuple[str, ...],
+        show_figures: bool = True,
+    ) -> StudyAnalysis:
+        """Analyze selected buses, publish local artefacts, and return their result."""
         if self.study is None:
             raise RuntimeError("Open a study before starting an analysis.")
+        if not buses:
+            raise ValueError("Select at least one bus for analysis.")
+        if len(buses) != len(set(buses)):
+            raise ValueError("A bus may be selected only once.")
 
+        bus_analyses = tuple(
+            BusStudyAnalysis(
+                bus_name=bus_name,
+                signal_analysis=self.pipeline.analyze_measurement(
+                    self.study.bus(bus_name).measurement(VOLTAGE_RMS)
+                ),
+            )
+            for bus_name in buses
+        )
+        study_analysis = StudyAnalysis(bus_analyses)
         controller_analysis = self.pipeline.analyze_controllers()
+        transfer_analysis = self.pipeline.analyze_power_transfers()
+
         controller_output_directory = self.controller_output_directory()
         self.save_figure(
-            self.pipeline.plot_controller_population(controller_analysis),
+            self.pipeline.plot_controller_population(
+                controller_analysis,
+                study_analysis,
+            ),
             controller_output_directory,
             "01_population.png",
         )
         self.save_figure(
-            self.pipeline.plot_weighted_controllers(controller_analysis),
+            self.pipeline.plot_weighted_controllers(
+                controller_analysis,
+                study_analysis,
+            ),
             controller_output_directory,
             "02_weighted.png",
         )
 
-        bus = self.study.bus(bus_name)
-        voltage_measurement = bus.measurement(VOLTAGE_RMS)
-        voltage_analysis = self.pipeline.analyze_measurement(voltage_measurement)
-        bus_output_directory = self.bus_output_directory(bus.name)
-        self.save_figure(
-            self.pipeline.plot_initialization(voltage_analysis),
-            bus_output_directory,
-            "01_initialization.png",
-        )
+        for bus_analysis in study_analysis.bus_analyses:
+            self._publish_bus_analysis(bus_analysis, controller_analysis)
 
-        if voltage_analysis.has_stability_assessments:
-            self.save_figure(
-                self.pipeline.plot_voltage_stability(voltage_analysis),
-                bus_output_directory,
-                "02_voltage.png",
-            )
-            self.save_figure(
-                self.pipeline.plot_frequency_by_voltage_stability(voltage_analysis),
-                bus_output_directory,
-                "03_frequency.png",
-            )
-            if controller_analysis.weighted_run_points:
-                self._save_controller_indicator_figures(
-                    controller_analysis,
-                    voltage_analysis,
-                    bus_output_directory,
-                )
+        self._publish_transfer_analysis(transfer_analysis)
 
-        AnalysisReport(bus.name, voltage_analysis).write(
+        AnalysisReport(study_analysis, transfer_analysis).write(
             self.analysis_output_directory()
         )
 
@@ -156,7 +155,113 @@ class MonteCarloWorkbench:
 
             plt.show()
 
-        return voltage_analysis
+        return study_analysis
+
+    def plot_power_transfers(
+        self,
+        *,
+        start_time_s: float = 0.9,
+        end_time_s: float = 3.0,
+        show_figure: bool = True,
+    ) -> Path:
+        """Calculate and publish transfer damping figures without bus analysis."""
+        transfer_analysis = self.pipeline.analyze_power_transfers()
+        output_paths = self._publish_transfer_analysis(
+            transfer_analysis,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+        )
+        if show_figure:
+            import matplotlib.pyplot as plt
+
+            plt.show()
+        return output_paths[0]
+
+    def _publish_transfer_analysis(
+        self,
+        transfer_analysis,
+        *,
+        start_time_s: float = 0.9,
+        end_time_s: float = 3.0,
+    ) -> tuple[Path, ...]:
+        """Publish the overview, damping distribution, and worst-case evidence."""
+        output_directory = self.analysis_output_directory() / "03_transfers"
+        output_directory.mkdir(parents=True, exist_ok=True)
+        figures = [
+            (
+                "01_power_overview.png",
+                self.pipeline.plot_power_transfer_overview(
+                    start_time_s=start_time_s,
+                    end_time_s=end_time_s,
+                    transfer_analysis=transfer_analysis,
+                ),
+            )
+        ]
+        if any(
+            item.damping_ratio is not None for item in transfer_analysis.assessments
+        ):
+            figures.extend(
+                (
+                    (
+                        "02_damping_by_transfer.png",
+                        self.pipeline.plot_transfer_damping_summary(transfer_analysis),
+                    ),
+                    (
+                        "03_worst_damping_cases.png",
+                        self.pipeline.plot_worst_transfer_damping_cases(
+                            transfer_analysis
+                        ),
+                    ),
+                )
+            )
+        return tuple(
+            self.save_figure(figure, output_directory, filename)
+            for filename, figure in figures
+        )
+
+    def _publish_bus_analysis(
+        self,
+        bus_analysis: BusStudyAnalysis,
+        controller_analysis,
+    ) -> None:
+        """Publish the local figures for one selected bus."""
+        bus_output_directory = self.bus_output_directory(bus_analysis.bus_name)
+        voltage_analysis = bus_analysis.signal_analysis
+        self.save_figure(
+            self.pipeline.plot_initialization(voltage_analysis),
+            bus_output_directory,
+            "01_initialization.png",
+        )
+
+        if not voltage_analysis.has_stability_assessments:
+            return
+
+        self.save_figure(
+            self.pipeline.plot_voltage_stability(voltage_analysis),
+            bus_output_directory,
+            "02_voltage.png",
+        )
+        self.save_figure(
+            self.pipeline.plot_voltage_contingency_closeup(voltage_analysis),
+            bus_output_directory,
+            "03_voltage_contingency.png",
+        )
+        self.save_figure(
+            self.pipeline.plot_voltage_fault_closeup(voltage_analysis),
+            bus_output_directory,
+            "04_voltage_fault_closeup.png",
+        )
+        self.save_figure(
+            self.pipeline.plot_frequency_by_voltage_stability(voltage_analysis),
+            bus_output_directory,
+            "05_frequency.png",
+        )
+        if controller_analysis.weighted_run_points:
+            self._save_controller_indicator_figures(
+                controller_analysis,
+                voltage_analysis,
+                bus_output_directory,
+            )
 
     def controller_output_directory(self) -> Path:
         """Return the dedicated output directory for study-wide controller figures."""
@@ -176,11 +281,7 @@ class MonteCarloWorkbench:
         ]
         bus_suffix = f"_{bus.name}"
         existing_directory = next(
-            (
-                path
-                for path in existing_directories
-                if path.name.endswith(bus_suffix)
-            ),
+            (path for path in existing_directories if path.name.endswith(bus_suffix)),
             None,
         )
         if existing_directory is not None:
@@ -212,36 +313,36 @@ class MonteCarloWorkbench:
         """Publish controller indicators derived from the selected voltage analysis."""
         figures = (
             (
-                "04_post_clearance.png",
-                self.pipeline.plot_post_clearance_area_vs_weighted_controllers(
-                    controller_analysis,
-                    voltage_analysis,
-                ),
-            ),
-            (
-                "05_fault_on.png",
+                "06_fault_on.png",
                 self.pipeline.plot_fault_on_area_vs_weighted_controllers(
                     controller_analysis,
                     voltage_analysis,
                 ),
             ),
             (
-                "06_recovery.png",
+                "07_recovery.png",
                 self.pipeline.plot_recovery_area_vs_weighted_controllers(
                     controller_analysis,
                     voltage_analysis,
                 ),
             ),
             (
-                "07_unified_response.png",
+                "08_unified_response.png",
                 self.pipeline.plot_unified_response_area_vs_weighted_controllers(
                     controller_analysis,
                     voltage_analysis,
                 ),
             ),
             (
-                "08_persistence.png",
-                self.pipeline.plot_post_fault_persistence_area_vs_weighted_controllers(
+                "09_below_070.png",
+                self.pipeline.plot_crisis_decision_vs_weighted_controllers(
+                    controller_analysis,
+                    voltage_analysis,
+                ),
+            ),
+            (
+                "10_below_080.png",
+                self.pipeline.plot_low_voltage_duration_vs_weighted_controllers(
                     controller_analysis,
                     voltage_analysis,
                 ),
@@ -249,4 +350,3 @@ class MonteCarloWorkbench:
         )
         for filename, figure in figures:
             self.save_figure(figure, output_directory, filename)
-

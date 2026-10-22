@@ -1,223 +1,110 @@
-"""Behavioral checks for post-clearance voltage analysis."""
+"""Unit tests for the voltage response and recovery assessment."""
 
-import math
 import unittest
 
 from signal_analysis import StabilityCriteria, assess_stability
 
 
-class StabilityTests(unittest.TestCase):
-    def setUp(self):
-        self.time = [index / 1000 for index in range(3001)]
-        self.criteria = StabilityCriteria(
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=3.0,
-            minimum_final_reference_start_time_s=2.0,
-            post_fault_persistence_start_time_s=2.0,
-            post_fault_persistence_max_end_time_s=3.0,
-            maximum_relative_error_area_s=0.03,
-        )
+class StabilityAssessmentTests(unittest.TestCase):
+    """Verify the active voltage criteria and event-response areas."""
 
-    def assess(self, voltage, criteria=None, pre_fault_reference_value=None):
-        return assess_stability(
-            self.time,
-            [voltage(time) for time in self.time],
-            criteria or self.criteria,
-            pre_fault_reference_value=pre_fault_reference_value,
-        )
+    def setUp(self) -> None:
+        self.time = [index / 1000 for index in range(5001)]
+        self.criteria = StabilityCriteria()
 
-    def test_idd_uses_the_supplied_pre_fault_reference_over_the_fault_window(self):
-        criteria = StabilityCriteria(
-            fault_time_s=0.5,
-            dynamic_performance_index_end_time_s=0.62,
-            maximum_dynamic_performance_index_pu_s=0.02,
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=3.0,
-            minimum_final_reference_start_time_s=2.0,
-            post_fault_persistence_start_time_s=2.0,
-            post_fault_persistence_max_end_time_s=3.0,
-        )
+    def assess(self, voltage):
+        return assess_stability(self.time, voltage, self.criteria)
 
-        result = self.assess(
-            lambda time: 0.95 if 0.5 <= time <= 0.62 else 1.0,
-            criteria,
-            pre_fault_reference_value=1.05,
-        )
+    def test_response_areas_partition_the_unified_event_response(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if 1.0 <= time <= 1.12:
+                voltage[index] = 0.90
+            elif 1.12 < time <= 2.0:
+                voltage[index] = 0.98
 
-        self.assertAlmostEqual(result.pre_fault_reference_value, 1.05)
-        self.assertAlmostEqual(result.dynamic_performance_index_pu_s, 0.012, places=8)
-        self.assertTrue(result.is_dynamic_performance_index_compliant)
+        result = self.assess(voltage)
 
-    def test_unified_response_area_is_the_sum_of_fault_and_recovery_areas(self):
-        criteria = StabilityCriteria(
-            fault_time_s=0.5,
-            dynamic_performance_index_end_time_s=0.62,
-            response_area_end_time_s=1.0,
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=3.0,
-            minimum_final_reference_start_time_s=2.0,
-            post_fault_persistence_start_time_s=2.0,
-            post_fault_persistence_max_end_time_s=3.0,
-        )
-
-        result = self.assess(
-            lambda time: (
-                0.90
-                if 0.5 <= time <= 0.62
-                else 0.98 if 0.62 < time <= 1.0 else 1.0
-            ),
-            criteria,
-            pre_fault_reference_value=1.0,
-        )
-
-        self.assertAlmostEqual(result.dynamic_performance_index_pu_s, 0.012, places=8)
-        self.assertAlmostEqual(result.recovery_area_pu_s, 0.00764, places=8)
+        self.assertAlmostEqual(result.fault_on_area_pu_s, 0.012, places=8)
+        self.assertAlmostEqual(result.recovery_area_pu_s, 0.01764, places=8)
         self.assertAlmostEqual(
             result.unified_response_area_pu_s,
-            result.dynamic_performance_index_pu_s + result.recovery_area_pu_s,
+            result.fault_on_area_pu_s + result.recovery_area_pu_s,
             places=8,
         )
 
-    def test_post_fault_persistence_area_is_separate_from_unified_response(self):
-        criteria = StabilityCriteria(
-            fault_time_s=0.5,
-            dynamic_performance_index_end_time_s=0.62,
-            response_area_end_time_s=1.0,
-            post_fault_persistence_start_time_s=1.5,
-            post_fault_persistence_max_end_time_s=2.0,
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=3.0,
-            minimum_final_reference_start_time_s=2.0,
-        )
+    def test_low_voltage_duration_accumulates_separate_intervals(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if 1.0 <= time < 1.5 or 2.0 <= time < 2.6:
+                voltage[index] = 0.70
 
-        baseline = self.assess(lambda time: 1.0, criteria, 1.0)
-        persistent = self.assess(
-            lambda time: 0.95 if 1.5 <= time < 2.0 else 1.0,
-            criteria,
-            1.0,
-        )
+        result = self.assess(voltage)
 
+        self.assertAlmostEqual(result.cumulative_low_voltage_duration_s, 1.099, places=3)
+        self.assertFalse(result.is_low_voltage_duration_compliant)
+
+    def test_crisis_voltage_uses_the_final_post_clearance_upward_crossing(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if 1.0 <= time < 1.16:
+                voltage[index] = 0.60
+
+        result = self.assess(voltage)
+        self.assertTrue(result.is_crisis_voltage_compliant)
+        self.assertEqual(result.crisis_decision_event, "recovery_crossing")
         self.assertAlmostEqual(
-            persistent.unified_response_area_pu_s,
-            baseline.unified_response_area_pu_s,
-            places=8,
-        )
-        self.assertGreater(persistent.post_fault_persistence_area_pu_s, 0.0)
-
-    def test_post_fault_persistence_area_uses_simulation_end_capped_at_ten_seconds(self):
-        time = [index / 1000 for index in range(12001)]
-        criteria = StabilityCriteria(
-            fault_time_s=0.5,
-            dynamic_performance_index_end_time_s=0.62,
-            response_area_end_time_s=1.0,
-            post_fault_persistence_start_time_s=2.0,
-            post_fault_persistence_max_end_time_s=10.0,
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=12.0,
-            minimum_final_reference_start_time_s=11.0,
+            result.crisis_decision_duration_s,
+            0.03925,
+            places=3,
         )
 
-        result = assess_stability(
-            time,
-            [0.9 if 2.0 <= instant <= 10.0 else 1.0 for instant in time],
-            criteria,
-            pre_fault_reference_value=1.0,
-        )
-
-        self.assertAlmostEqual(result.post_fault_persistence_end_time_s, 10.0)
-        self.assertAlmostEqual(result.post_fault_persistence_area_pu_s, 0.8, places=8)
-
-    def test_area_is_the_integral_of_absolute_relative_error(self):
-        result = self.assess(
-            lambda time: 1.02 if 0.5 <= time <= 1.5 else 1.0
-        )
-
-        self.assertAlmostEqual(result.final_reference_value, 1.0)
-        self.assertAlmostEqual(result.relative_error_area_s, 0.02, places=8)
+        for index, time in enumerate(self.time):
+            if 1.2 <= time < 1.28:
+                voltage[index] = 0.69
+        result = self.assess(voltage)
+        self.assertFalse(result.is_crisis_voltage_compliant)
         self.assertAlmostEqual(
-            result.post_clear_peak_absolute_relative_error, 0.02, places=8
-        )
-        self.assertTrue(result.is_area_within_limit)
-        self.assertTrue(result.is_settled)
-
-    def test_area_above_limit_is_unsettled(self):
-        result = self.assess(
-            lambda time: 1.04 if 0.5 <= time <= 1.5 else 1.0
+            result.crisis_decision_duration_s,
+            0.0799677,
+            places=3,
         )
 
-        self.assertFalse(result.is_area_within_limit)
+    def test_late_critical_contact_fails_even_when_the_signal_recovers(self):
+        voltage = [1.0] * len(self.time)
+        voltage[int(1.2 * 1000)] = 0.70
 
-    def test_limit_is_closed(self):
-        provisional = self.assess(
-            lambda time: 1.02 if 0.5 <= time <= 1.5 else 1.0
-        )
-        criterion_at_measurement = StabilityCriteria(
-            clearance_time_s=0.5,
-            evaluation_duration_s=1.0,
-            final_reference_duration_s=1.0,
-            minimum_simulation_end_time_s=3.0,
-            minimum_final_reference_start_time_s=2.0,
-            post_fault_persistence_start_time_s=2.0,
-            post_fault_persistence_max_end_time_s=3.0,
-            maximum_relative_error_area_s=provisional.relative_error_area_s,
-        )
+        result = self.assess(voltage)
 
-        result = self.assess(
-            lambda time: 1.02 if 0.5 <= time <= 1.5 else 1.0,
-            criterion_at_measurement,
-        )
+        self.assertFalse(result.is_crisis_voltage_compliant)
+        self.assertAlmostEqual(result.crisis_decision_time_s, 1.2, places=6)
 
-        self.assertTrue(result.is_area_within_limit)
+    def test_recovery_at_the_50_ms_deadline_is_not_strictly_compliant(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if 1.0 <= time < 1.17:
+                voltage[index] = 0.60
+        voltage[int(1.17 * 1000)] = 0.70
 
-    def test_short_simulation_is_not_classified(self):
-        short_time = [index / 1000 for index in range(2500)]
-        with self.assertRaises(ValueError):
+        result = self.assess(voltage)
+
+        self.assertFalse(result.is_crisis_voltage_compliant)
+        self.assertAlmostEqual(result.crisis_decision_time_s, 1.17, places=6)
+
+    def test_final_settlement_uses_the_last_second_of_a_five_second_run(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if time >= 4.5:
+                voltage[index] = 1.12
+
+        result = self.assess(voltage)
+        self.assertFalse(result.is_settled)
+        self.assertIn("Final settlement", result.failed_criteria)
+
+    def test_short_simulation_is_not_evaluable(self):
+        short_time = [index / 1000 for index in range(4999)]
+        with self.assertRaisesRegex(ValueError, "minimum stability evaluation time"):
             assess_stability(short_time, [1.0] * len(short_time), self.criteria)
-
-    def test_default_reference_requires_a_complete_second_from_time_five(self):
-        time = [index / 1000 for index in range(6000)]
-        with self.assertRaises(ValueError):
-            assess_stability(time, [1.0] * len(time))
-
-    def test_recovery_group_uses_the_signal_after_the_area_window(self):
-        recovered = self.assess(lambda time: 1.0)
-        later_undervoltage = self.assess(
-            lambda time: 0.79 if 1.6 <= time < 1.7 else 1.0
-        )
-
-        self.assertTrue(recovered.remains_above_voltage_threshold_after_evaluation)
-        self.assertAlmostEqual(recovered.minimum_voltage_after_evaluation_pu, 1.0)
-        self.assertFalse(
-            later_undervoltage.remains_above_voltage_threshold_after_evaluation
-        )
-        self.assertAlmostEqual(
-            later_undervoltage.minimum_voltage_after_evaluation_pu, 0.79
-        )
-
-    def test_final_settlement_requires_a_quiet_last_second(self):
-        settled = self.assess(lambda time: 1.0)
-        unsettled = self.assess(
-            lambda time: 1.0 + 0.06 * math.sin(20 * time)
-        )
-
-        self.assertTrue(settled.is_settled)
-        self.assertFalse(unsettled.is_settled)
-        self.assertLessEqual(
-            unsettled.final_settlement_peak_absolute_relative_error, 0.10
-        )
-        self.assertGreater(
-            unsettled.final_settlement_peak_to_peak_relative_range, 0.10
-        )
 
 
 if __name__ == "__main__":

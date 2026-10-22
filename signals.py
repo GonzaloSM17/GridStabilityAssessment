@@ -1,4 +1,4 @@
-"""Bus measurements published as time-series columns in Monte Carlo Parquet files."""
+"""Published bus measurements and named power-transfer signals."""
 
 from dataclasses import dataclass
 import re
@@ -49,11 +49,24 @@ class Bus:
         return self.measurement(FREQUENCY)
 
 
+@dataclass(frozen=True)
+class PowerTransfer:
+    """One explicitly published active-power transfer monitor."""
+
+    name: str
+    column_name: str
+
+
 class SignalCatalog:
     """Discover buses and supported measurements from one published schema."""
 
-    def __init__(self, buses: tuple[Bus, ...]) -> None:
+    def __init__(
+        self,
+        buses: tuple[Bus, ...],
+        power_transfers: tuple[PowerTransfer, ...],
+    ) -> None:
         self._buses = buses
+        self._power_transfers = power_transfers
         self._buses_by_key = {
             self._normalise_bus_name(bus.name): bus for bus in buses
         }
@@ -89,12 +102,25 @@ class SignalCatalog:
                 )
             )
 
-        return cls(tuple(buses))
+        power_transfers = tuple(
+            PowerTransfer(
+                name=column_name.removesuffix("/P").removeprefix("PQ_"),
+                column_name=column_name,
+            )
+            for column_name in sorted(column_names)
+            if column_name.startswith("PQ_") and column_name.endswith("/P")
+        )
+        return cls(tuple(buses), power_transfers)
 
     @property
     def buses(self) -> tuple[Bus, ...]:
         """Return every discovered bus with RMS-voltage measurements."""
         return self._buses
+
+    @property
+    def power_transfers(self) -> tuple[PowerTransfer, ...]:
+        """Return active-power transfer monitors explicitly published as ``PQ_* /P``."""
+        return self._power_transfers
 
     def bus(self, name: str) -> Bus:
         """Resolve a logical bus name such as KIMAL_220 to a published source."""

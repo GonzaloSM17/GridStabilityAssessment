@@ -69,3 +69,38 @@ class TimeSeriesDataset:
             .collect()
         )
 
+    def read_series_window(
+        self,
+        names: list[str] | tuple[str, ...],
+        start_time_s: float,
+        end_time_s: float,
+    ):
+        """Read several named series within an inclusive time window."""
+        if start_time_s >= end_time_s:
+            raise ValueError("The time-window start must precede its end.")
+        series = [self.get_series(name) for name in names]
+
+        import polars as pl
+
+        return (
+            pl.scan_parquet(self.parquet_path)
+            .filter(
+                (pl.col(self.time_column) >= start_time_s)
+                & (pl.col(self.time_column) <= end_time_s)
+            )
+            .select([self.time_column, *(item.name for item in series)])
+            .collect()
+        )
+
+    def read_series_group(self, names: list[str] | tuple[str, ...]):
+        """Read time and several named series without applying a time window."""
+        series = [self.get_series(name) for name in names]
+
+        import polars as pl
+
+        return (
+            pl.scan_parquet(self.parquet_path)
+            .select([self.time_column, *(item.name for item in series)])
+            .collect()
+        )
+

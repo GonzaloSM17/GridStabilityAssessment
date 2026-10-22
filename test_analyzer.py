@@ -18,7 +18,7 @@ class NiceNumberTests(unittest.TestCase):
                     _round_up_to_nice_number(value)
 
 
-class NoPostFaultAssessmentTests(unittest.TestCase):
+class NoStabilityAssessmentTests(unittest.TestCase):
     def setUp(self):
         self.analysis = SignalStudyAnalysis(
             signal_name="test/voltage",
@@ -26,11 +26,11 @@ class NoPostFaultAssessmentTests(unittest.TestCase):
             skipped_run_ids=(),
         )
 
-    def test_analysis_exposes_the_absence_of_post_fault_assessments(self):
+    def test_analysis_exposes_the_absence_of_stability_assessments(self):
         self.assertFalse(self.analysis.has_stability_assessments)
 
     def test_controller_area_plots_report_a_clear_error_without_assessments(self):
-        with self.assertRaisesRegex(ValueError, "No post-fault assessments"):
+        with self.assertRaisesRegex(ValueError, "No voltage-stability assessments"):
             AnalysisPipeline._stability_criteria_from(self.analysis)
 
 

@@ -13,6 +13,11 @@ from signal_analysis import (
 )
 from signals import Measurement, VOLTAGE_RMS
 from study import MonteCarloStudy
+from transfer_analysis import (
+    DampingCriteria,
+    TransferStudyAnalysis,
+    assess_transfer_damping,
+)
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
@@ -50,6 +55,86 @@ def _round_up_to_nice_number(value: float) -> float:
             return rounded_value * magnitude
 
     raise AssertionError("A 1-2-5 rounded value should always be found.")
+
+
+def _severity_color_map():
+    """Return the shared low-to-high voltage-response severity color scale."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    return LinearSegmentedColormap.from_list(
+        "voltage_response_severity",
+        ("#009E73", "#E69F00", "#D55E00"),
+    )
+
+
+def _response_area_normalization(area_by_run_id: dict[int, float]):
+    """Normalize response areas from zero to a rounded study-wide maximum."""
+    from matplotlib.colors import Normalize
+
+    areas = tuple(area_by_run_id.values())
+    if not areas:
+        return Normalize(vmin=0.0, vmax=1.0)
+    maximum_area = _round_up_to_nice_number(max(areas))
+    return Normalize(vmin=0.0, vmax=maximum_area, clip=True)
+
+
+def _response_area_color_scale(area_by_run_id: dict[int, float]):
+    """Return a shared severity scale with percentile-anchored transitions.
+
+    The colorbar remains in physical response-area units from zero to the
+    rounded study maximum. The 20th and 80th percentiles anchor the color
+    transition, without leaving a visually unhelpful flat green or red band.
+    """
+    import numpy as np
+    from matplotlib.colors import LinearSegmentedColormap
+
+    normalization = _response_area_normalization(area_by_run_id)
+    areas = tuple(area_by_run_id.values())
+    if len(areas) < 2 or max(areas) == min(areas):
+        return normalization, _severity_color_map()
+
+    lower_percentile = float(np.quantile(areas, 0.20))
+    median_percentile = float(np.quantile(areas, 0.50))
+    upper_percentile = float(np.quantile(areas, 0.80))
+    lower_position = float(normalization(lower_percentile))
+    median_position = float(normalization(median_percentile))
+    upper_position = float(normalization(upper_percentile))
+    if upper_position <= lower_position:
+        return normalization, _severity_color_map()
+    if not lower_position < median_position < upper_position:
+        median_position = (lower_position + upper_position) / 2.0
+
+    color_map = LinearSegmentedColormap.from_list(
+        "ranked_voltage_response_severity",
+        (
+            (0.0, "#009E73"),
+            (lower_position, "#25A584"),
+            (median_position, "#E6C229"),
+            (upper_position, "#E67E22"),
+            (1.0, "#D73027"),
+        ),
+    )
+    return normalization, color_map
+
+
+def _damping_color_scale(damping_ratios: tuple[float, ...]):
+    """Return a semantic damping scale with the 5 percent limit visible."""
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+
+    maximum_ratio = max((*damping_ratios, 0.05))
+    upper_ratio = _round_up_to_nice_number(maximum_ratio * 100.0) / 100.0
+    normalization = Normalize(vmin=0.0, vmax=upper_ratio, clip=True)
+    limit_position = min(0.05 / upper_ratio, 1.0)
+    color_map = LinearSegmentedColormap.from_list(
+        "transfer_damping",
+        (
+            (0.0, "#D73027"),
+            (limit_position * 0.8, "#E67E22"),
+            (limit_position, "#E6C229"),
+            (1.0, "#009E73"),
+        ),
+    )
+    return normalization, color_map
 
 
 @dataclass(frozen=True)
@@ -121,20 +206,20 @@ class SignalStudyAnalysis:
 
     @property
     def stable_run_ids(self) -> tuple[int, ...]:
-        """Return initialized runs settled within the final-timing tolerance."""
+        """Return runs that meet every active voltage-stability criterion."""
         return tuple(
             result.run_id
             for result in self.run_results
-            if result.stability is not None and result.stability.is_settled
+            if result.stability is not None and result.stability.is_stable
         )
 
     @property
     def unsettled_post_contingency_run_ids(self) -> tuple[int, ...]:
-        """Return initialized runs outside the final-timing tolerance."""
+        """Return evaluated runs that fail one or more voltage criteria."""
         return tuple(
             result.run_id
             for result in self.run_results
-            if result.stability is not None and not result.stability.is_settled
+            if result.stability is not None and not result.stability.is_stable
         )
 
     @property
@@ -152,23 +237,110 @@ class SignalStudyAnalysis:
         return any(result.stability is not None for result in self.run_results)
 
     @property
-    def above_voltage_threshold_after_evaluation_run_ids(self) -> tuple[int, ...]:
-        """Return runs that remain above 0.8 pu after the area window."""
+    def crisis_voltage_compliant_run_ids(self) -> tuple[int, ...]:
+        """Return runs that meet the 0.70 pu post-clearance criterion."""
         return tuple(
             result.run_id
             for result in self.run_results
             if result.stability is not None
-            and result.stability.remains_above_voltage_threshold_after_evaluation
+            and result.stability.is_crisis_voltage_compliant
         )
 
     @property
-    def below_voltage_threshold_after_evaluation_run_ids(self) -> tuple[int, ...]:
-        """Return runs that fall below 0.8 pu after the area window."""
+    def low_voltage_duration_compliant_run_ids(self) -> tuple[int, ...]:
+        """Return runs within the cumulative 0.80 pu duration limit."""
         return tuple(
             result.run_id
             for result in self.run_results
             if result.stability is not None
-            and not result.stability.remains_above_voltage_threshold_after_evaluation
+            and result.stability.is_low_voltage_duration_compliant
+        )
+
+
+@dataclass(frozen=True)
+class BusStudyAnalysis:
+    """One selected bus and its local voltage-analysis result."""
+
+    bus_name: str
+    signal_analysis: SignalStudyAnalysis
+
+
+@dataclass(frozen=True)
+class StudyAnalysis:
+    """The selected local analyses and their consolidated run status."""
+
+    bus_analyses: tuple[BusStudyAnalysis, ...]
+
+    def __post_init__(self) -> None:
+        if not self.bus_analyses:
+            raise ValueError("A study analysis requires at least one selected bus.")
+        names = [analysis.bus_name for analysis in self.bus_analyses]
+        if len(names) != len(set(names)):
+            raise ValueError("A bus may be selected only once per study analysis.")
+
+    @property
+    def run_ids(self) -> tuple[int, ...]:
+        """Return every run represented by at least one local analysis."""
+        return tuple(
+            sorted(
+                {
+                    result.run_id
+                    for bus_analysis in self.bus_analyses
+                    for result in bus_analysis.signal_analysis.run_results
+                }
+            )
+        )
+
+    @property
+    def stable_run_ids(self) -> tuple[int, ...]:
+        """Return runs that pass every selected local analysis."""
+        return tuple(
+            run_id for run_id in self.run_ids if self.status_for_run(run_id) == "Stable"
+        )
+
+    def status_for_run(self, run_id: int) -> str:
+        """Return the consolidated status across all selected buses for one run."""
+        results = self._results_for_run(run_id)
+        if any(result is None or result.stability is None for _, result in results):
+            return "Not evaluated"
+        if any(not result.stability.is_stable for _, result in results):
+            return "Unstable"
+        return "Stable"
+
+    def reasons_for_run(self, run_id: int) -> tuple[str, ...]:
+        """Return the selected local reasons behind a non-stable run status."""
+        reasons = []
+        for bus_name, result in self._results_for_run(run_id):
+            if result is None:
+                reasons.append(f"{bus_name}: no readable signal")
+            elif result.stability is None:
+                reason = (
+                    "initialization"
+                    if not result.initialization.is_well_initialized
+                    else "insufficient simulation duration"
+                )
+                reasons.append(f"{bus_name}: {reason}")
+            elif not result.stability.is_stable:
+                reasons.append(
+                    f"{bus_name}: {', '.join(result.stability.failed_criteria)}"
+                )
+        return tuple(reasons)
+
+    def _results_for_run(self, run_id: int):
+        """Pair each selected bus with its local result for one run."""
+        return tuple(
+            (
+                bus_analysis.bus_name,
+                next(
+                    (
+                        result
+                        for result in bus_analysis.signal_analysis.run_results
+                        if result.run_id == run_id
+                    ),
+                    None,
+                ),
+            )
+            for bus_analysis in self.bus_analyses
         )
 
 
@@ -242,147 +414,448 @@ class AnalysisPipeline:
             skipped_run_ids=tuple(skipped_run_ids),
         )
 
-    def plot_controller_population(self, analysis: ControllerStudyAnalysis):
-        """Plot one fn-xi point per active machine across every run."""
-        figure, axis = self._create_controller_figure(
-            "Controller population across all active machines"
-        )
-        inside_points, outside_points = self._split_controller_points(
-            analysis.controller_points
-        )
-        axis.scatter(
-            [point.fn_hz for point in inside_points],
-            [point.xi for point in inside_points],
-            s=8,
-            color="tab:blue",
-            alpha=0.18,
-            label="Inside design range",
-        )
-        axis.scatter(
-            [point.fn_hz for point in outside_points],
-            [point.xi for point in outside_points],
-            s=12,
-            color="tab:red",
-            alpha=0.6,
-            label="Outside design range",
-        )
-        axis.legend(loc="upper right")
-        figure.tight_layout()
-        return figure
-
-    def plot_weighted_controllers(self, analysis: ControllerStudyAnalysis):
-        """Plot one nominal-power-weighted fn-xi point per Monte Carlo run."""
-        figure, axis = self._create_controller_figure(
-            "Nominal-power-weighted controller point by run"
-        )
-        inside_points, outside_points = self._split_controller_points(
-            analysis.weighted_run_points
-        )
-        axis.scatter(
-            [point.fn_hz for point in inside_points],
-            [point.xi for point in inside_points],
-            s=22,
-            color="tab:blue",
-            alpha=0.6,
-            label="Inside design range",
-        )
-        axis.scatter(
-            [point.fn_hz for point in outside_points],
-            [point.xi for point in outside_points],
-            s=28,
-            color="tab:red",
-            alpha=0.8,
-            label="Outside design range",
-        )
-        axis.legend(loc="upper right")
-        figure.tight_layout()
-        return figure
-
-    def plot_post_clearance_area_vs_weighted_controllers(
+    def analyze_power_transfers(
         self,
-        controller_analysis: ControllerStudyAnalysis,
-        signal_analysis: SignalStudyAnalysis,
+        criteria: DampingCriteria | None = None,
+    ) -> TransferStudyAnalysis:
+        """Assess every explicitly published active-power transfer in every run."""
+        criteria = criteria or DampingCriteria()
+        transfers = self.study.power_transfers
+        columns = tuple(transfer.column_name for transfer in transfers)
+        assessments = []
+        for run in self.context.runs:
+            if run.dataset is None:
+                continue
+            try:
+                data = run.dataset.read_series_group(columns)
+            except (KeyError, ValueError):
+                continue
+            time_values = data["time"].to_list()
+            for transfer in transfers:
+                try:
+                    assessments.append(
+                        assess_transfer_damping(
+                            time_values,
+                            data[transfer.column_name].to_list(),
+                            run_id=run.run_id,
+                            transfer_name=transfer.name,
+                            criteria=criteria,
+                        )
+                    )
+                except ValueError:
+                    continue
+        return TransferStudyAnalysis(tuple(assessments))
+
+    def plot_power_transfer_overview(
+        self,
+        *,
+        start_time_s: float = 0.9,
+        end_time_s: float = 3.0,
+        transfer_analysis: TransferStudyAnalysis | None = None,
     ):
-        """Plot the first post-clearance-second area against weighted fn and xi."""
+        """Plot every published active-power transfer over a common time window.
+
+        This is intentionally an observational view: individual Monte Carlo
+        runs are shown lightly and their pointwise median is emphasized. No
+        transfer stability or damping decision is made here.
+        """
+        if start_time_s >= end_time_s:
+            raise ValueError("The transfer-view start must precede its end.")
+        transfers = self.study.power_transfers
+        if not transfers:
+            raise ValueError("No PQ_* active-power transfer monitors were found.")
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.lines import Line2D
+
+        columns = tuple(transfer.column_name for transfer in transfers)
+        column_values = {column: [] for column in columns}
+        time_values = None
+        for run in self.context.runs:
+            if run.dataset is None:
+                continue
+            try:
+                data = run.dataset.read_series_window(
+                    columns,
+                    start_time_s,
+                    end_time_s,
+                )
+            except (KeyError, ValueError):
+                continue
+            current_time_values = data["time"].to_numpy()
+            if time_values is None:
+                time_values = current_time_values
+            if (
+                time_values is None
+                or len(current_time_values) != len(time_values)
+                or not np.array_equal(current_time_values, time_values)
+            ):
+                continue
+            for column in columns:
+                column_values[column].append((run.run_id, data[column].to_numpy()))
+
+        if time_values is None:
+            raise ValueError("No transfer data covers the selected time window.")
+
+        column_count = 3
+        row_count = ceil(len(transfers) / column_count)
+        figure, axes = plt.subplots(
+            row_count,
+            column_count,
+            figsize=(18, 3.7 * row_count),
+            sharex=True,
+        )
+        axes = np.asarray(axes).reshape(-1)
+        criteria = StabilityCriteria()
+        assessment_by_key = {
+            (assessment.run_id, assessment.transfer_name): assessment
+            for assessment in (transfer_analysis.assessments if transfer_analysis else ())
+        }
+        damping_ratios = tuple(
+            assessment.damping_ratio
+            for assessment in assessment_by_key.values()
+            if assessment.damping_ratio is not None
+        )
+        damping_normalization, damping_color_map = _damping_color_scale(damping_ratios)
+        for axis, transfer in zip(axes, transfers):
+            axis.axvspan(
+                criteria.fault_time_s,
+                criteria.clearance_time_s,
+                color="gold",
+                alpha=0.20,
+            )
+            axis.axvspan(
+                criteria.clearance_time_s,
+                criteria.response_end_time_s,
+                color="gold",
+                alpha=0.10,
+            )
+            values = column_values[transfer.column_name]
+            for run_id, series_values in values:
+                assessment = assessment_by_key.get((run_id, transfer.name))
+                color = "#4C78A8"
+                if assessment is not None:
+                    if assessment.damping_ratio is not None:
+                        color = damping_color_map(
+                            damping_normalization(assessment.damping_ratio)
+                        )
+                    elif assessment.status in {
+                        "opened",
+                        "inactive_pre_fault",
+                        "no_identifiable_oscillation",
+                    }:
+                        color = "#9E9E9E"
+                axis.plot(
+                    time_values,
+                    series_values,
+                    color=color,
+                    alpha=0.055,
+                    linewidth=0.55,
+                )
+            if values:
+                axis.plot(
+                    time_values,
+                    np.median(np.asarray([series for _, series in values]), axis=0),
+                    color="#1F3A5F",
+                    linewidth=1.4,
+                )
+            axis.set_title(transfer.name, fontsize=9)
+            axis.grid(visible=True, alpha=0.3)
+            axis.set_xlim(start_time_s, end_time_s)
+
+        for axis in axes[len(transfers):]:
+            axis.set_visible(False)
+        for axis in axes[::column_count]:
+            axis.set_ylabel("Active power")
+        for axis in axes[-column_count:]:
+            if axis.get_visible():
+                axis.set_xlabel("Time (s)")
+        legend_handles = [
+            Line2D((0,), (0,), color="#1F3A5F", linewidth=1.4, label="Pointwise median"),
+            Line2D((0,), (0,), color="gold", linewidth=7, alpha=0.35, label="Contingency / recovery"),
+        ]
+        if transfer_analysis is None:
+            legend_handles.insert(
+                0,
+                Line2D((0,), (0,), color="#4C78A8", alpha=0.45, label="Monte Carlo run"),
+            )
+        else:
+            legend_handles[0:0] = [
+                Line2D((0,), (0,), color="#D73027", alpha=0.65, label="Evaluated: xi below 5%"),
+                Line2D((0,), (0,), color="#009E73", alpha=0.65, label="Evaluated: xi above 5%"),
+                Line2D((0,), (0,), color="#9E9E9E", alpha=0.65, label="No damping pair / opened"),
+            ]
+        figure.legend(
+            handles=legend_handles,
+            loc="lower center",
+            ncol=3,
+            frameon=False,
+        )
+        figure.suptitle(
+            f"Active-power transfer overview ({start_time_s:.1f}-{end_time_s:.1f} s)"
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.98,
+            bottom=0.12,
+            top=0.94,
+            hspace=0.36,
+            wspace=0.22,
+        )
+        return figure
+
+    def plot_transfer_damping_summary(self, analysis: TransferStudyAnalysis):
+        """Plot every evaluated transfer/run damping result against the 5% limit."""
         import matplotlib.pyplot as plt
         import numpy as np
 
-        weighted_points_by_run_id = {
-            point.run_id: point for point in controller_analysis.weighted_run_points
-        }
-        rows = [
-            (
-                weighted_points_by_run_id[result.run_id],
-                result.stability.relative_error_area_s * 100,
-                result.stability.is_settled,
+        transfer_names = analysis.transfer_names
+        if not transfer_names:
+            raise ValueError("No transfer damping assessments are available.")
+        damping_ratios = tuple(
+            assessment.damping_ratio
+            for assessment in analysis.assessments
+            if assessment.damping_ratio is not None
+        )
+        if not damping_ratios:
+            raise ValueError("No transfer contains identifiable damping pairs.")
+        normalization, color_map = _damping_color_scale(damping_ratios)
+        evaluated_transfer_names = tuple(
+            transfer_name
+            for transfer_name in transfer_names
+            if any(
+                item.damping_ratio is not None
+                for item in analysis.assessments_for_transfer(transfer_name)
             )
-            for result in signal_analysis.run_results
-            if result.stability is not None
-            and result.run_id in weighted_points_by_run_id
-        ]
-        if not rows:
-            raise ValueError("No runs contain both post-clearance area and controller data.")
+        )
+        figure, axis = plt.subplots(
+            figsize=(12, max(4.2, 0.75 * len(evaluated_transfer_names) + 2.5))
+        )
+        labels = []
+        for index, transfer_name in enumerate(evaluated_transfer_names):
+            assessments = analysis.assessments_for_transfer(transfer_name)
+            evaluated = [item for item in assessments if item.damping_ratio is not None]
+            opened_count = sum(item.status == "opened" for item in assessments)
+            no_oscillation_count = sum(
+                item.status == "no_identifiable_oscillation" for item in assessments
+            )
+            jitter = np.linspace(-0.22, 0.22, len(evaluated)) if evaluated else ()
+            axis.scatter(
+                [item.damping_ratio * 100.0 for item in evaluated],
+                [index + offset for offset in jitter],
+                c=[color_map(normalization(item.damping_ratio)) for item in evaluated],
+                s=20,
+                alpha=0.78,
+                edgecolors="none",
+            )
+            labels.append(f"{transfer_name}\n{len(evaluated)} evaluated")
+        axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2, label="5% limit")
+        axis.set_yticks(range(len(evaluated_transfer_names)), labels)
+        axis.set_xlabel("Damping ratio, xi (%)")
+        axis.set_ylabel("Transfer")
+        lower_bound = min(0.0, min(damping_ratios) * 100.0)
+        upper_bound = max(5.0, _round_up_to_nice_number(max(damping_ratios) * 100.0))
+        axis.set_xlim(lower_bound, upper_bound)
+        axis.grid(axis="x", visible=True, alpha=0.3)
+        axis.legend(loc="lower right")
+        excluded_transfer_count = len(transfer_names) - len(evaluated_transfer_names)
+        excluded_run_count = sum(
+            item.status in {"opened", "inactive_pre_fault", "no_identifiable_oscillation"}
+            for item in analysis.assessments
+        )
+        if excluded_transfer_count:
+            figure.text(
+                0.5,
+                0.01,
+                f"{excluded_transfer_count} transfer(s), {excluded_run_count} run assessment(s) "
+                "excluded from xi distribution: opened, inactive, or no identifiable oscillation. "
+                "See Transfer Summary in the report.",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+        figure.suptitle("Transfer damping by Monte Carlo run")
+        figure.tight_layout(rect=(0.0, 0.06 if excluded_transfer_count else 0.0, 1.0, 0.95))
+        return figure
 
-        figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
-        groups = (
-            (True, "Settled", "tab:green"),
-            (False, "Unsettled", "tab:red"),
-        )
-        dimensions = (
-            ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (2.0, 20.0)),
-            ("xi", "Power-weighted damping ratio, xi", (0.6, 1.0)),
-        )
-        for axis, (attribute, label, x_limits) in zip(axes, dimensions):
-            for is_settled, group_label, color in groups:
-                points = [row for row in rows if row[2] == is_settled]
-                axis.scatter(
-                    [getattr(point, attribute) for point, _, _ in points],
-                    [area for _, area, _ in points],
-                    color=color,
-                    s=20,
-                    alpha=0.7,
-                    label=group_label,
-                )
-            x_values = np.asarray(
-                [getattr(point, attribute) for point, _, _ in rows], dtype=float
+    def plot_worst_transfer_damping_cases(
+        self,
+        analysis: TransferStudyAnalysis,
+        *,
+        start_time_s: float = 1.12,
+        end_time_s: float = 3.0,
+    ):
+        """Plot one worst reliable damping case per transfer with its selected peaks."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        worst_assessments = []
+        for transfer_name in analysis.transfer_names:
+            assessed = [
+                item
+                for item in analysis.assessments_for_transfer(transfer_name)
+                if item.worst_damping_pair is not None
+            ]
+            if assessed:
+                worst_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
+        if not worst_assessments:
+            raise ValueError("No transfer contains identifiable damping pairs.")
+
+        transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
+        run_by_id = {run.run_id: run for run in self.context.runs}
+        columns = 3
+        rows = ceil(len(worst_assessments) / columns)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.8 * rows), sharex=True)
+        axes = np.asarray(axes).reshape(-1)
+        for axis, assessment in zip(axes, worst_assessments):
+            transfer = transfer_by_name[assessment.transfer_name]
+            run = run_by_id[assessment.run_id]
+            data = run.dataset.read_series_window(
+                (transfer.column_name,), start_time_s, end_time_s
             )
-            area_values = np.asarray([area for _, area, _ in rows], dtype=float)
-            linear_coefficients = np.polyfit(x_values, area_values, deg=1)
-            fitted_areas = np.polyval(linear_coefficients, x_values)
-            residual_sum = float(np.sum((area_values - fitted_areas) ** 2))
-            total_sum = float(np.sum((area_values - area_values.mean()) ** 2))
-            r_squared = 1.0 - residual_sum / total_sum if total_sum else 0.0
-            curve_x = np.linspace(x_values.min(), x_values.max(), 200)
-            axis.plot(
-                curve_x,
-                np.polyval(linear_coefficients, curve_x),
-                color="tab:blue",
-                linewidth=1.5,
-                label=f"Linear fit (R^2={r_squared:.3f})",
+            pair = assessment.worst_damping_pair
+            axis.plot(data["time"], data[transfer.column_name], color="#4C78A8", linewidth=0.8)
+            axis.axhline(assessment.final_power, color="#1F3A5F", linestyle="--", linewidth=1.0)
+            peak_values = [
+                assessment.final_power + pair.first_amplitude,
+                assessment.final_power + pair.second_amplitude,
+            ]
+            if pair.polarity == "negative":
+                peak_values = [
+                    assessment.final_power - pair.first_amplitude,
+                    assessment.final_power - pair.second_amplitude,
+                ]
+            axis.scatter(
+                (pair.first_time_s, pair.second_time_s),
+                peak_values,
+                color="#D73027",
+                s=28,
+                zorder=3,
             )
-            axis.axhline(
-                10.0,
-                color="tab:red",
-                linestyle="--",
-                linewidth=1.0,
-                label="10 %*s reference",
+            axis.set_title(
+                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"xi={assessment.damping_ratio * 100:.2f}%"
             )
-            axis.axhline(
-                5.0,
-                color="tab:orange",
-                linestyle="--",
-                linewidth=1.0,
-                label="5 %*s reference",
-            )
-            axis.set_xlabel(label)
-            axis.set_xlim(*x_limits)
-            axis.set_ylim(bottom=0.0)
             axis.grid(visible=True, alpha=0.3)
-            axis.legend(loc="upper right")
+            axis.set_xlim(start_time_s, end_time_s)
+        for axis in axes[len(worst_assessments):]:
+            axis.set_visible(False)
+        for axis in axes[::columns]:
+            axis.set_ylabel("Active power")
+        for axis in axes[-columns:]:
+            if axis.get_visible():
+                axis.set_xlabel("Time (s)")
+        figure.suptitle("Worst reliable damping case by transfer")
+        figure.tight_layout()
+        return figure
 
-        axes[0].set_ylabel("Post-clearance relative-error area (%*s)")
-        figure.suptitle(
-            f"{signal_analysis.signal_name}: post-clearance area vs. weighted parameters"
+    def plot_controller_population(
+        self,
+        analysis: ControllerStudyAnalysis,
+        study_analysis: StudyAnalysis | None = None,
+    ):
+        """Plot all machine controllers using the selected-study run status."""
+        figure, axis = self._create_controller_figure(
+            self._controller_figure_title(
+                "Controller population across all active machines",
+                study_analysis,
+            )
+        )
+        stable_run_ids = self._stable_run_ids(study_analysis)
+        stable_points = [
+            point for point in analysis.controller_points if point.run_id in stable_run_ids
+        ]
+        unstable_points = [
+            point for point in analysis.controller_points if point.run_id not in stable_run_ids
+        ]
+        axis.scatter(
+            [point.fn_hz for point in stable_points],
+            [point.xi for point in stable_points],
+            s=8,
+            color="tab:blue",
+            alpha=0.28,
+            label="Stable voltage run",
+        )
+        if study_analysis is not None:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=8,
+                color="tab:red",
+                alpha=0.38,
+                label="Other runs",
+            )
+        elif unstable_points:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=8,
+                color="tab:blue",
+                alpha=0.28,
+                label="Controller point",
+            )
+        axis.legend(
+            loc="lower right",
+            bbox_to_anchor=(0.99, 0.01),
+            ncol=4,
+            fontsize=7,
+            framealpha=0.92,
+        )
+        figure.tight_layout()
+        return figure
+
+    def plot_weighted_controllers(
+        self,
+        analysis: ControllerStudyAnalysis,
+        study_analysis: StudyAnalysis | None = None,
+    ):
+        """Plot weighted controllers using the selected-study run status."""
+        figure, axis = self._create_controller_figure(
+            self._controller_figure_title(
+                "Nominal-power-weighted controller point by run",
+                study_analysis,
+            )
+        )
+        stable_run_ids = self._stable_run_ids(study_analysis)
+        stable_points = [
+            point for point in analysis.weighted_run_points if point.run_id in stable_run_ids
+        ]
+        unstable_points = [
+            point for point in analysis.weighted_run_points if point.run_id not in stable_run_ids
+        ]
+        axis.scatter(
+            [point.fn_hz for point in stable_points],
+            [point.xi for point in stable_points],
+            s=22,
+            color="tab:blue",
+            alpha=0.55,
+            label="Stable voltage run",
+        )
+        if study_analysis is not None:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=22,
+                color="tab:red",
+                alpha=0.65,
+                label="Other runs",
+            )
+        elif unstable_points:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=22,
+                color="tab:blue",
+                alpha=0.55,
+                label="Controller point",
+            )
+        axis.legend(
+            loc="lower right",
+            bbox_to_anchor=(0.99, 0.01),
+            ncol=4,
+            fontsize=7,
+            framealpha=0.92,
         )
         figure.tight_layout()
         return figure
@@ -394,14 +867,14 @@ class AnalysisPipeline:
     ):
         """Plot the area from fault inception to clearance."""
         criteria = self._stability_criteria_from(signal_analysis)
-        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+        return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
-            metric_attribute="dynamic_performance_index_pu_s",
+            metric_attribute="fault_on_area_pu_s",
             y_label="Fault-on absolute-voltage area (pu*s)",
             title=(
                 f"{signal_analysis.signal_name}: fault-on area "
-                f"({criteria.fault_time_s:.2f}-{criteria.dynamic_performance_index_end_time_s:.2f} s)"
+                f"({criteria.fault_time_s:.2f}-{criteria.clearance_time_s:.2f} s)"
             ),
         )
 
@@ -412,15 +885,15 @@ class AnalysisPipeline:
     ):
         """Plot the area from clearance through the remainder of the first second."""
         criteria = self._stability_criteria_from(signal_analysis)
-        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+        return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
             metric_attribute="recovery_area_pu_s",
             y_label="Recovery absolute-voltage area (pu*s)",
             title=(
                 f"{signal_analysis.signal_name}: recovery area "
-                f"({criteria.dynamic_performance_index_end_time_s:.2f}-"
-                f"{criteria.response_area_end_time_s:.2f} s)"
+                f"({criteria.clearance_time_s:.2f}-"
+                f"{criteria.response_end_time_s:.2f} s)"
             ),
         )
 
@@ -431,46 +904,63 @@ class AnalysisPipeline:
     ):
         """Plot the unified one-second area from fault inception."""
         criteria = self._stability_criteria_from(signal_analysis)
-        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+        return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
             metric_attribute="unified_response_area_pu_s",
             y_label="Unified response absolute-voltage area (pu*s)",
             title=(
                 f"{signal_analysis.signal_name}: unified response area "
-                f"({criteria.fault_time_s:.2f}-{criteria.response_area_end_time_s:.2f} s)"
+                f"({criteria.fault_time_s:.2f}-{criteria.response_end_time_s:.2f} s)"
             ),
         )
 
-    def plot_post_fault_persistence_area_vs_weighted_controllers(
+    def plot_crisis_decision_vs_weighted_controllers(
         self,
         controller_analysis: ControllerStudyAnalysis,
         signal_analysis: SignalStudyAnalysis,
     ):
-        """Plot the separate area from 2 s to each run end, capped at 10 s."""
+        """Plot the threshold event that decides the 0.70 pu criterion."""
         criteria = self._stability_criteria_from(signal_analysis)
-        return self._plot_pre_fault_reference_area_vs_weighted_controllers(
+        return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
-            metric_attribute="post_fault_persistence_area_pu_s",
-            y_label="Post-fault persistence area (pu*s)",
+            metric_attribute="crisis_decision_duration_s",
+            y_label="0.70 pu decision time after clearance (s)",
             title=(
-                f"{signal_analysis.signal_name}: post-fault persistence area "
-                f"({criteria.post_fault_persistence_start_time_s:.2f} s to "
-                f"min(simulation end, "
-                f"{criteria.post_fault_persistence_max_end_time_s:.2f} s))"
+                f"{signal_analysis.signal_name}: 0.70 pu stability decision"
             ),
+            criterion_limit=criteria.post_clearance_grace_period_s,
+            criterion_label=(
+                "0.70 pu deadline: "
+                f"{criteria.post_clearance_grace_period_s:.3f} s"
+            ),
+            status_attribute="is_crisis_voltage_compliant",
+            passed_label="Pass 0.70 pu recovery",
+            failed_label="Fail 0.70 pu recovery",
         )
 
-    def plot_dynamic_performance_index_vs_weighted_controllers(
+    def plot_low_voltage_duration_vs_weighted_controllers(
         self,
         controller_analysis: ControllerStudyAnalysis,
         signal_analysis: SignalStudyAnalysis,
     ):
-        """Retain the former IDD plotting API for the fault-on area."""
-        return self.plot_fault_on_area_vs_weighted_controllers(
+        """Plot the active cumulative 0.80 pu duration criterion."""
+        criteria = self._stability_criteria_from(signal_analysis)
+        return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
+            metric_attribute="cumulative_low_voltage_duration_s",
+            y_label="Cumulative time below 0.80 pu (s)",
+            title=(
+                f"{signal_analysis.signal_name}: cumulative 0.80 pu duration "
+                f"(from {criteria.fault_time_s:.2f} s)"
+            ),
+            criterion_limit=criteria.maximum_cumulative_low_voltage_duration_s,
+            criterion_label=(
+                "0.80 pu limit: "
+                f"{criteria.maximum_cumulative_low_voltage_duration_s:.3f} s"
+            ),
         )
 
     @staticmethod
@@ -480,11 +970,11 @@ class AnalysisPipeline:
             if result.stability is not None:
                 return result.stability.criteria
         raise ValueError(
-            "No post-fault assessments are available. "
+            "No voltage-stability assessments are available. "
             "At least one run must pass initialization and reach the required duration."
         )
 
-    def _plot_pre_fault_reference_area_vs_weighted_controllers(
+    def _plot_voltage_indicator_vs_weighted_controllers(
         self,
         controller_analysis: ControllerStudyAnalysis,
         signal_analysis: SignalStudyAnalysis,
@@ -492,34 +982,52 @@ class AnalysisPipeline:
         metric_attribute: str,
         y_label: str,
         title: str,
+        criterion_limit: float | None = None,
+        criterion_label: str | None = None,
+        status_attribute: str | None = None,
+        passed_label: str = "Stable",
+        failed_label: str = "Unstable",
     ):
-        """Plot one pre-fault-reference area against the weighted controls."""
+        """Plot one local voltage indicator against the weighted controls."""
         import matplotlib.pyplot as plt
         import numpy as np
 
         weighted_points_by_run_id = {
             point.run_id: point for point in controller_analysis.weighted_run_points
         }
-        rows = [
-            (
-                weighted_points_by_run_id[result.run_id],
-                getattr(result.stability, metric_attribute),
-                result.stability.is_settled,
+        rows = []
+        missing_metric_count = 0
+        for result in signal_analysis.run_results:
+            if result.stability is None or result.run_id not in weighted_points_by_run_id:
+                continue
+            metric = getattr(result.stability, metric_attribute)
+            if metric is None:
+                missing_metric_count += 1
+                continue
+            passed = (
+                getattr(result.stability, status_attribute)
+                if status_attribute is not None
+                else result.stability.is_stable
             )
-            for result in signal_analysis.run_results
-            if result.stability is not None
-            and result.run_id in weighted_points_by_run_id
-        ]
+            rows.append((weighted_points_by_run_id[result.run_id], metric, passed))
         if not rows:
-            raise ValueError("No runs contain both area and controller data.")
+            raise ValueError("No runs contain both the selected indicator and controller data.")
 
-        area_values = np.asarray([area for _, area, _ in rows], dtype=float)
-        maximum_area = float(area_values.max())
-        area_y_upper_limit = ceil(maximum_area * 10.0) / 10.0
+        metric_values = np.asarray([metric for _, metric, _ in rows], dtype=float)
+        maximum_metric = max(
+            float(metric_values.max()),
+            criterion_limit if criterion_limit is not None else 0.0,
+        )
+        metric_y_upper_limit = (
+            ceil(maximum_metric * 1.1 * 100.0) / 100.0
+            if maximum_metric <= 0.1
+            else ceil(maximum_metric * 1.1 * 10.0) / 10.0
+        )
+        metric_y_upper_limit = max(metric_y_upper_limit, 0.01)
         figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
         groups = (
-            (True, "Settled", "tab:green"),
-            (False, "Unsettled", "tab:red"),
+            (True, passed_label, "tab:blue"),
+            (False, failed_label, "tab:red"),
         )
         dimensions = (
             ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (2.0, 20.0)),
@@ -530,7 +1038,7 @@ class AnalysisPipeline:
                 points = [row for row in rows if row[2] == is_settled]
                 axis.scatter(
                     [getattr(point, attribute) for point, _, _ in points],
-                    [area for _, area, _ in points],
+                    [metric for _, metric, _ in points],
                     color=color,
                     s=20,
                     alpha=0.7,
@@ -539,44 +1047,42 @@ class AnalysisPipeline:
             x_values = np.asarray(
                 [getattr(point, attribute) for point, _, _ in rows], dtype=float
             )
-            linear_coefficients = np.polyfit(x_values, area_values, deg=1)
-            fitted_areas = np.polyval(linear_coefficients, x_values)
-            residual_sum = float(np.sum((area_values - fitted_areas) ** 2))
-            total_sum = float(np.sum((area_values - area_values.mean()) ** 2))
+            linear_coefficients = np.polyfit(x_values, metric_values, deg=1)
+            fitted_metrics = np.polyval(linear_coefficients, x_values)
+            residual_sum = float(np.sum((metric_values - fitted_metrics) ** 2))
+            total_sum = float(np.sum((metric_values - metric_values.mean()) ** 2))
             r_squared = 1.0 - residual_sum / total_sum if total_sum else 0.0
             curve_x = np.linspace(x_values.min(), x_values.max(), 200)
             axis.plot(
                 curve_x,
                 np.polyval(linear_coefficients, curve_x),
-                color="tab:blue",
+                color="#5E3C99",
                 linewidth=1.5,
                 label=f"Linear fit (R^2={r_squared:.3f})",
             )
             axis.set_xlabel(label)
             axis.set_xlim(*x_limits)
-            axis.set_ylim(0.0, area_y_upper_limit)
+            if criterion_limit is not None:
+                axis.axhline(
+                    criterion_limit,
+                    color="tab:red",
+                    linestyle="--",
+                    linewidth=1.0,
+                    label=criterion_label,
+                )
+            axis.set_ylim(0.0, metric_y_upper_limit)
             axis.grid(visible=True, alpha=0.3)
             axis.legend(loc="upper right")
 
         axes[0].set_ylabel(y_label)
-        figure.suptitle(f"{title} vs. weighted parameters")
+        note = (
+            f"; {missing_metric_count} run(s) did not complete final recovery"
+            if missing_metric_count
+            else ""
+        )
+        figure.suptitle(f"{title} vs. weighted parameters{note}")
         figure.tight_layout()
         return figure
-
-    @staticmethod
-    def _split_controller_points(points):
-        """Split controller points according to the requested design range."""
-        inside_points = []
-        outside_points = []
-        for point in points:
-            if (
-                DESIGN_FN_RANGE_HZ[0] <= point.fn_hz <= DESIGN_FN_RANGE_HZ[1]
-                and DESIGN_XI_RANGE[0] <= point.xi <= DESIGN_XI_RANGE[1]
-            ):
-                inside_points.append(point)
-            else:
-                outside_points.append(point)
-        return inside_points, outside_points
 
     @staticmethod
     def _create_controller_figure(title: str):
@@ -614,12 +1120,19 @@ class AnalysisPipeline:
             xi_values,
             lower_bandwidth_fn,
             upper_bandwidth_fn,
-            color="tab:orange",
-            alpha=0.14,
-            label="Bandwidth range: 5-10 Hz",
+            color="#5E3C99",
+            alpha=0.12,
+            label=(
+                f"Bandwidth guide: {BANDWIDTH_RANGE_HZ[0]:.2f}-"
+                f"{BANDWIDTH_RANGE_HZ[1]:.2f} Hz"
+            ),
         )
-        axis.plot(lower_bandwidth_fn, xi_values, color="tab:orange", linewidth=1.5)
-        axis.plot(upper_bandwidth_fn, xi_values, color="tab:orange", linewidth=1.5)
+        axis.plot(
+            [*lower_bandwidth_fn, *reversed(upper_bandwidth_fn), lower_bandwidth_fn[0]],
+            [*xi_values, *reversed(xi_values), xi_values[0]],
+            color="#5E3C99",
+            linewidth=0.9,
+        )
         axis.set_xlim(*FN_PLOT_LIMITS_HZ)
         axis.set_ylim(*XI_PLOT_LIMITS)
         axis.set_xlabel("Natural frequency, fn (Hz)")
@@ -627,6 +1140,25 @@ class AnalysisPipeline:
         axis.set_title(title)
         axis.grid(visible=True, alpha=0.3)
         return figure, axis
+
+    @staticmethod
+    def _stable_run_ids(
+        study_analysis: StudyAnalysis | None,
+    ) -> set[int]:
+        """Return consolidated stable run identifiers, when available."""
+        if study_analysis is None:
+            return set()
+        return set(study_analysis.stable_run_ids)
+
+    @staticmethod
+    def _controller_figure_title(
+        title: str,
+        study_analysis: StudyAnalysis | None,
+    ) -> str:
+        """Identify the selected-study status used to color controller points."""
+        if study_analysis is None:
+            return title
+        return f"{title}: consolidated selected-analysis status"
 
 
     def analyze_measurement(
@@ -740,7 +1272,7 @@ class AnalysisPipeline:
             vcenter=criteria.maximum_fast_relative_error_percentile_99,
             vmax=color_bar_maximum,
         )
-        color_map = plt.get_cmap("RdYlGn_r")
+        color_map = _severity_color_map()
         for row_index, (title, run_ids) in enumerate(groups):
             voltage_axis = axes[row_index, 0]
             frequency_axis = axes[row_index, 1]
@@ -795,7 +1327,7 @@ class AnalysisPipeline:
 
             voltage_axis.set_title(f"{title} — voltage ({len(run_ids)} runs)")
             voltage_axis.set_ylabel("Voltage (pu)")
-            voltage_axis.set_ylim(0.9, 1.1)
+            voltage_axis.set_ylim(0.9, 1.5)
             voltage_axis.grid(visible=True, alpha=0.3)
             voltage_axis.legend(loc="upper left")
 
@@ -849,36 +1381,48 @@ class AnalysisPipeline:
         )
         return figure
 
-    def plot_voltage_stability(self, analysis: SignalStudyAnalysis):
-        """Plot runs according to their post-fault recovery and final settlement."""
+    def plot_voltage_stability(
+        self,
+        analysis: SignalStudyAnalysis,
+        *,
+        start_time_s: float = 0.0,
+        end_time_s: float = POST_CONTINGENCY_PLOT_END_TIME_S,
+        title: str = "recovery and final settlement",
+    ):
+        """Plot every active criterion separately; failure groups overlap by design."""
         import matplotlib.pyplot as plt
         import polars as pl
-        from matplotlib.cm import ScalarMappable
-        from matplotlib.colors import Normalize
 
         passing_run_ids = {
             result.run_id
             for result in analysis.run_results
             if result.stability is not None
-            and result.stability.remains_above_voltage_threshold_after_evaluation
-            and result.stability.is_settled
+            and result.stability.is_stable
         }
-        evaluated_run_ids = {
+        crisis_failure_run_ids = {
             result.run_id
             for result in analysis.run_results
             if result.stability is not None
+            and not result.stability.is_crisis_voltage_compliant
+        }
+        low_voltage_duration_failure_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None
+            and not result.stability.is_low_voltage_duration_compliant
+        }
+        settlement_failure_run_ids = {
+            result.run_id
+            for result in analysis.run_results
+            if result.stability is not None and not result.stability.is_settled
         }
         groups = (
-            (
-                "Pass 0.8 pu and final-settlement criteria",
-                passing_run_ids,
-            ),
-            (
-                "Fail at least one recovery or settlement criterion",
-                evaluated_run_ids - passing_run_ids,
-            ),
+            ("Pass all active voltage criteria", passing_run_ids),
+            ("Fail final recovery above 0.70 pu", crisis_failure_run_ids),
+            ("Fail cumulative time below 0.80 pu", low_voltage_duration_failure_run_ids),
+            ("Fail final-settlement criterion", settlement_failure_run_ids),
         )
-        figure, axes = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
+        figure, axes = plt.subplots(2, 2, figsize=(17, 11), sharex=True, sharey=True)
         completed_assessments = {
             result.run_id: result.stability
             for result in analysis.run_results
@@ -888,115 +1432,134 @@ class AnalysisPipeline:
             (assessment.criteria for assessment in completed_assessments.values()),
             StabilityCriteria(),
         )
-        severity_by_run_id = {
-            run_id: assessment.recovery_area_pu_s
+        crisis_deadline_time_s = (
+            criteria.clearance_time_s + criteria.post_clearance_grace_period_s
+        )
+        import matplotlib.cm as cm
+
+        area_by_run_id = {
+            run_id: assessment.unified_response_area_pu_s
             for run_id, assessment in completed_assessments.items()
         }
-        maximum_severity = max(
-            severity_by_run_id.values(),
-            default=0.0,
-        )
-        color_bar_maximum = ceil(max(maximum_severity, 0.01) * 10.0) / 10.0
-        color_normalization = Normalize(
-            vmin=0.0,
-            vmax=color_bar_maximum,
-        )
-        color_map = plt.get_cmap("RdYlGn_r")
-        recovery_end_time_s = criteria.response_area_end_time_s
+        normalization, color_map = _response_area_color_scale(area_by_run_id)
 
-        for axis, (title, run_ids) in zip(axes, groups):
-            voltage_axis = axis
-            voltage_axis.axvspan(
+        for axis, (group_title, run_ids) in zip(axes.flat, groups):
+            axis.axvspan(
+                criteria.fault_time_s,
                 criteria.clearance_time_s,
-                recovery_end_time_s,
+                color="gold",
+                alpha=0.20,
+                label="Contingency",
+            )
+            axis.axvspan(
+                criteria.clearance_time_s,
+                criteria.response_end_time_s,
                 color="gold",
                 alpha=0.10,
-                label="Recovery-area window",
+                label="Recovery window",
             )
-            voltage_axis.axhline(
-                criteria.post_evaluation_voltage_threshold_pu,
+            axis.axhline(
+                criteria.low_voltage_threshold_pu,
                 color="tab:orange",
                 linestyle="--",
                 linewidth=1.0,
-                label="0.8 pu",
+                label="0.80 pu",
             )
-            voltage_axis.axhline(
-                0.7,
+            axis.axhline(
+                criteria.crisis_voltage_threshold_pu,
                 color="tab:red",
                 linestyle="--",
                 linewidth=1.0,
-                label="0.7 pu",
+                label="0.70 pu",
+            )
+            axis.axvline(
+                crisis_deadline_time_s,
+                color="tab:red",
+                linestyle=":",
+                linewidth=1.0,
+                label="50 ms after clearance",
             )
             for run in self.context.runs:
                 if run.run_id not in run_ids or run.dataset is None:
                     continue
 
                 data = run.dataset.read_series(analysis.signal_name).filter(
-                    (pl.col("time") >= 0.0)
-                    & (pl.col("time") <= POST_CONTINGENCY_PLOT_END_TIME_S)
+                    (pl.col("time") >= start_time_s)
+                    & (pl.col("time") <= end_time_s)
                 )
-                color = color_map(
-                    color_normalization(severity_by_run_id[run.run_id])
-                )
-                voltage_axis.plot(
+                axis.plot(
                     data["time"],
                     data[analysis.signal_name],
-                    color=color,
+                    color=color_map(normalization(area_by_run_id[run.run_id])),
                     alpha=0.55,
                     linewidth=0.65,
                 )
-            voltage_axis.set_title(f"{title} — voltage ({len(run_ids)} runs)")
-            voltage_axis.set_ylabel("Voltage (pu)")
-            voltage_axis.set_ylim(0.1, 1.3)
-            voltage_axis.grid(visible=True, alpha=0.3)
-            voltage_axis.legend(loc="lower right")
+            axis.set_title(f"{group_title} ({len(run_ids)} runs)")
+            axis.set_ylabel("Voltage (pu)")
+            axis.set_ylim(0.1, 1.5)
+            axis.grid(visible=True, alpha=0.3)
+            axis.legend(loc="lower left", fontsize="small")
 
-        axes[-1].set_xlabel("Time (s)")
-        axes[-1].set_xlim(0.0, POST_CONTINGENCY_PLOT_END_TIME_S)
-        color_bar = figure.colorbar(
-            ScalarMappable(norm=color_normalization, cmap=color_map),
-            ax=axes,
-            pad=0.015,
-        )
-        color_bar.set_label(
-            "Recovery absolute-voltage area (pu*s)"
-        )
-        color_bar.set_ticks((0.0, color_bar_maximum))
-        color_bar.set_ticklabels(
-            (
-                "0.0 pu*s " + chr(10) + "(best)",
-                f"{color_bar_maximum:.1f} pu*s " + chr(10) + "(worst)",
-            )
+        for axis in axes[-1]:
+            axis.set_xlabel("Time (s)")
+        for axis in axes.flat:
+            axis.set_xlim(start_time_s, end_time_s)
+        figure.suptitle(
+            f"{analysis.signal_name}: {title}" + chr(10)
+            + "Failure panels are non-exclusive: a run can appear in more than one."
         )
         figure.subplots_adjust(
-            left=0.09,
-            right=0.78,
+            left=0.07,
+            right=0.85,
             bottom=0.08,
-            top=0.88,
+            top=0.87,
             hspace=0.28,
+            wspace=0.18,
         )
-        color_bar.ax.set_position((0.83, 0.14, 0.025, 0.70))
-        figure.suptitle(
-            f"{analysis.signal_name}: recovery and final settlement" + chr(10)
-            + f"Color: recovery area from {criteria.clearance_time_s:.2f} to "
-            + f"{recovery_end_time_s:.2f} s"
+        colorbar_axis = figure.add_axes((0.90, 0.15, 0.018, 0.66))
+        colorbar = figure.colorbar(
+            cm.ScalarMappable(norm=normalization, cmap=color_map),
+            cax=colorbar_axis,
+        )
+        colorbar.set_label(
+            "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
+            + "Low response area  →  High response area"
         )
         return figure
 
+    def plot_voltage_contingency_closeup(self, analysis: SignalStudyAnalysis):
+        """Plot the voltage-stability groups around the contingency interval."""
+        criteria = self._stability_criteria_from(analysis)
+        return self.plot_voltage_stability(
+            analysis,
+            start_time_s=0.9,
+            end_time_s=2.2,
+            title="contingency close-up",
+        )
+
+    def plot_voltage_fault_closeup(self, analysis: SignalStudyAnalysis):
+        """Plot the immediate fault and clearance interval in detail."""
+        return self.plot_voltage_stability(
+            analysis,
+            start_time_s=0.9,
+            end_time_s=1.2,
+            title="fault and clearance close-up",
+        )
+
     def plot_frequency_by_voltage_stability(self, analysis: SignalStudyAnalysis):
-        """Plot frequency using the stability groups established from RMS voltage."""
+        """Plot frequency using the voltage groups and their shared severity color."""
         if analysis.frequency_signal_name is None:
             raise ValueError("The voltage analysis has no associated frequency signal.")
 
         import matplotlib.pyplot as plt
+        import matplotlib.cm as cm
         import polars as pl
 
         passing_run_ids = {
             result.run_id
             for result in analysis.run_results
             if result.stability is not None
-            and result.stability.remains_above_voltage_threshold_after_evaluation
-            and result.stability.is_settled
+            and result.stability.is_stable
         }
         evaluated_run_ids = {
             result.run_id
@@ -1004,16 +1567,8 @@ class AnalysisPipeline:
             if result.stability is not None
         }
         groups = (
-            (
-                "Pass voltage-stability criteria",
-                passing_run_ids,
-                "tab:green",
-            ),
-            (
-                "Fail at least one voltage-stability criterion",
-                evaluated_run_ids - passing_run_ids,
-                "tab:red",
-            ),
+            ("Pass all voltage criteria", passing_run_ids),
+            ("Fail one or more voltage criteria", evaluated_run_ids - passing_run_ids),
         )
         criteria = next(
             (
@@ -1023,15 +1578,28 @@ class AnalysisPipeline:
             ),
             StabilityCriteria(),
         )
+        area_by_run_id = {
+            result.run_id: result.stability.unified_response_area_pu_s
+            for result in analysis.run_results
+            if result.stability is not None
+        }
+        normalization, color_map = _response_area_color_scale(area_by_run_id)
 
         figure, axes = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
-        for axis, (title, run_ids, color) in zip(axes, groups):
+        for axis, (title, run_ids) in zip(axes, groups):
+            axis.axvspan(
+                criteria.fault_time_s,
+                criteria.clearance_time_s,
+                color="gold",
+                alpha=0.20,
+                label="Contingency",
+            )
             axis.axvspan(
                 criteria.clearance_time_s,
-                criteria.response_area_end_time_s,
+                criteria.response_end_time_s,
                 color="gold",
                 alpha=0.10,
-                label="Voltage recovery-area window",
+                label="Voltage recovery window",
             )
             for run in self.context.runs:
                 if run.run_id not in run_ids or run.dataset is None:
@@ -1048,8 +1616,8 @@ class AnalysisPipeline:
                 axis.plot(
                     data["time"],
                     data[analysis.frequency_signal_name],
-                    color=color,
-                    alpha=0.35,
+                    color=color_map(normalization(area_by_run_id[run.run_id])),
+                    alpha=0.55,
                     linewidth=0.65,
                 )
 
@@ -1063,5 +1631,20 @@ class AnalysisPipeline:
         figure.suptitle(
             f"{analysis.frequency_signal_name}: grouped by voltage stability"
         )
-        figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+        figure.subplots_adjust(
+            left=0.08,
+            right=0.85,
+            bottom=0.08,
+            top=0.91,
+            hspace=0.22,
+        )
+        colorbar_axis = figure.add_axes((0.90, 0.18, 0.018, 0.64))
+        colorbar = figure.colorbar(
+            cm.ScalarMappable(norm=normalization, cmap=color_map),
+            cax=colorbar_axis,
+        )
+        colorbar.set_label(
+            "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
+            + "Low response area  →  High response area"
+        )
         return figure

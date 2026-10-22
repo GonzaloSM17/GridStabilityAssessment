@@ -1,4 +1,4 @@
-"""Manual place for running the current one-bus voltage analysis."""
+"""Manual place for selecting and running one Monte Carlo study analysis."""
 
 from workbench import MonteCarloWorkbench
 
@@ -10,7 +10,7 @@ if __name__ == "__main__":
         r"C:\Users\gonzalo.sanchez\OneDrive - Coordinador Eléctrico Nacional"
         r"\Projects Repositories\EmtpApplications\EMTP Assets_SEN2026_v0.8.xlsx"
     )
-    bus_name = "KIMAL_220"
+    buses = ("KIMAL_220",)
 
     workbench = MonteCarloWorkbench(context_path, assets_path)
-    workbench.analyze_voltage_rms(bus_name)
+    workbench.analyze(buses=buses)

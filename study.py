@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from assets import Assets
 from context import MonteCarloContext
-from signals import Bus, SignalCatalog
+from signals import Bus, PowerTransfer, SignalCatalog
 
 
 @dataclass
@@ -27,3 +27,8 @@ class MonteCarloStudy:
     def bus(self, name: str) -> Bus:
         """Return one bus discovered in the published study signals."""
         return self.signal_catalog.bus(name)
+
+    @property
+    def power_transfers(self) -> tuple[PowerTransfer, ...]:
+        """Return the explicitly published active-power transfer monitors."""
+        return self.signal_catalog.power_transfers
