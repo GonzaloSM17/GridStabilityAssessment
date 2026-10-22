@@ -264,7 +264,7 @@ class AnalysisReport:
         initialization = self._initialization_criteria(reference_analysis)
         stability = self._stability_criteria(reference_analysis)
         sheet.append(("Analysis", "Criterion", "Value"))
-        rows = (
+        rows = [
             ("Initialization", "Evaluation window [s]", f"{initialization.evaluation_start_time_s:.2f} to {initialization.evaluation_end_time_s:.2f}"),
             ("Initialization", "Smoothing window [s]", initialization.smoothing_duration_s),
             ("Initialization", "Maximum P99 fast error [%]", initialization.maximum_fast_relative_error_percentile_99 * 100),
@@ -278,7 +278,15 @@ class AnalysisReport:
             ("Voltage", "Maximum cumulative duration below 0.80 pu [s]", stability.maximum_cumulative_low_voltage_duration_s),
             ("Stability", "Final absolute error limit [%]", stability.maximum_final_absolute_relative_error * 100),
             ("Stability", "Final range limit [%]", stability.maximum_final_peak_to_peak_relative_range * 100),
-        )
+        ]
+        if self.transfer_analysis and self.transfer_analysis.assessments:
+            transfer_criteria = self.transfer_analysis.assessments[0].criteria
+            rows.extend(
+                (
+                    ("Transfer damping", "Evaluation start [s]", transfer_criteria.analysis_start_time_s),
+                    ("Transfer damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
+                )
+            )
         for row in rows:
             sheet.append(row)
 

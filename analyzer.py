@@ -21,7 +21,7 @@ from transfer_analysis import (
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
-XI_PLOT_LIMITS = (0.4, 1.1)
+XI_PLOT_LIMITS = (0.5, 1.1)
 DESIGN_FN_RANGE_HZ = (2.0, 50.0)
 DESIGN_XI_RANGE = (0.6, 1.0)
 BANDWIDTH_RANGE_HZ = (5.0, 10.0)
@@ -780,7 +780,7 @@ class AnalysisPipeline:
             s=8,
             color="tab:blue",
             alpha=0.28,
-            label="Stable voltage run",
+            label="Stable",
         )
         if study_analysis is not None:
             axis.scatter(
@@ -789,7 +789,7 @@ class AnalysisPipeline:
                 s=8,
                 color="tab:red",
                 alpha=0.38,
-                label="Other runs",
+            label="Unstable",
             )
         elif unstable_points:
             axis.scatter(
@@ -835,7 +835,7 @@ class AnalysisPipeline:
             s=22,
             color="tab:blue",
             alpha=0.55,
-            label="Stable voltage run",
+            label="Stable",
         )
         if study_analysis is not None:
             axis.scatter(
@@ -844,7 +844,7 @@ class AnalysisPipeline:
                 s=22,
                 color="tab:red",
                 alpha=0.65,
-                label="Other runs",
+            label="Unstable",
             )
         elif unstable_points:
             axis.scatter(
@@ -1393,6 +1393,7 @@ class AnalysisPipeline:
         start_time_s: float = 0.0,
         end_time_s: float = POST_CONTINGENCY_PLOT_END_TIME_S,
         title: str = "recovery and final settlement",
+        legend_location: str = "lower right",
     ):
         """Plot every active criterion separately; failure groups overlap by design."""
         import matplotlib.pyplot as plt
@@ -1503,7 +1504,7 @@ class AnalysisPipeline:
             axis.set_ylabel("Voltage (pu)")
             axis.set_ylim(0.1, 1.5)
             axis.grid(visible=True, alpha=0.3)
-            axis.legend(loc="lower left", fontsize="small")
+            axis.legend(loc=legend_location, fontsize="small")
 
         for axis in axes[-1]:
             axis.set_xlabel("Time (s)")
@@ -1549,6 +1550,7 @@ class AnalysisPipeline:
             start_time_s=0.9,
             end_time_s=1.2,
             title="fault and clearance close-up",
+            legend_location="lower left",
         )
 
     def plot_frequency_by_voltage_stability(self, analysis: SignalStudyAnalysis):
@@ -1628,6 +1630,7 @@ class AnalysisPipeline:
 
             axis.set_title(f"{title} ({len(run_ids)} runs)")
             axis.set_ylabel("Frequency (Hz)")
+            axis.set_ylim(48.5, 51.5)
             axis.grid(visible=True, alpha=0.3)
             axis.legend(loc="lower right")
 

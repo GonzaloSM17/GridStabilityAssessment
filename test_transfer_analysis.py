@@ -3,7 +3,7 @@
 from math import exp, pi, sqrt
 import unittest
 
-from transfer_analysis import assess_transfer_damping
+from transfer_analysis import DampingCriteria, assess_transfer_damping
 
 
 class TransferDampingTests(unittest.TestCase):
@@ -38,7 +38,7 @@ class TransferDampingTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "pass")
-        self.assertGreater(len(result.damping_pairs), 2)
+        self.assertGreaterEqual(len(result.damping_pairs), 2)
         self.assertAlmostEqual(result.damping_ratio, 0.10, places=2)
         self.assertEqual(
             result.damping_ratio,
@@ -55,6 +55,40 @@ class TransferDampingTests(unittest.TestCase):
 
         self.assertEqual(result.status, "pass")
         self.assertTrue(any(pair.polarity == "negative" for pair in result.damping_pairs))
+
+    def test_excludes_the_early_transient_from_the_damping_estimate(self):
+        values = []
+        for time in self.time:
+            if time < 1.0:
+                values.append(100.0)
+            elif time < 2.0:
+                values.append(
+                    90.0
+                    + 20.0
+                    * exp(2.0 * (time - 1.12))
+                    * __import__("math").cos(8.0 * pi * (time - 1.12))
+                )
+            else:
+                values.append(
+                    90.0
+                    + 20.0
+                    * exp(-1.0 * (time - 2.0))
+                    * __import__("math").cos(4.0 * pi * (time - 2.0))
+                )
+
+        after_transient = assess_transfer_damping(
+            self.time, values, run_id=1, transfer_name="NC_TEST_C1"
+        )
+        including_transient = assess_transfer_damping(
+            self.time,
+            values,
+            run_id=1,
+            transfer_name="NC_TEST_C1",
+            criteria=DampingCriteria(analysis_start_time_s=1.12),
+        )
+
+        self.assertGreater(after_transient.damping_ratio, 0.0)
+        self.assertLess(including_transient.damping_ratio, 0.0)
 
     def test_opened_transfer_is_not_a_damping_failure(self):
         values = [100.0 if time < 1.0 else 0.0 for time in self.time]

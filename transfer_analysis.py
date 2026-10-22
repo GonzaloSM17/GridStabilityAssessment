@@ -13,6 +13,7 @@ class DampingCriteria:
     pre_fault_start_time_s: float = 0.9
     fault_time_s: float = 1.0
     clearance_time_s: float = 1.12
+    analysis_start_time_s: float = 2.0
     final_reference_duration_s: float = 1.0
     minimum_simulation_end_time_s: float = 5.0
     minimum_pre_fault_power: float = 1.0
@@ -98,7 +99,7 @@ def assess_transfer_damping(
     transfer_name: str,
     criteria: DampingCriteria | None = None,
 ) -> TransferRunAssessment:
-    """Assess all reliable same-sign peak pairs after contingency clearance."""
+    """Assess reliable same-sign peak pairs after the configured transient window."""
     criteria = criteria or DampingCriteria()
     if len(time_values) != len(power_values) or len(time_values) < 3:
         raise ValueError("Transfer damping requires matching time and power samples.")
@@ -107,6 +108,8 @@ def assess_transfer_damping(
         raise ValueError("Transfer time samples must be strictly increasing.")
     if samples[-1][0] < criteria.minimum_simulation_end_time_s:
         raise ValueError("Transfer signal ends before final-reference evaluation time.")
+    if criteria.analysis_start_time_s < criteria.clearance_time_s:
+        raise ValueError("Damping analysis must start at or after contingency clearance.")
 
     pre_fault_values = [
         value
@@ -135,10 +138,14 @@ def assess_transfer_damping(
         return TransferRunAssessment(status="opened", damping_pairs=(), worst_damping_pair=None, **common)
 
     analysis_end_time_s = final_start_time_s
+    if criteria.analysis_start_time_s >= analysis_end_time_s:
+        raise ValueError(
+            "Damping analysis start must precede the final-reference window."
+        )
     response = [
         (time, value - final_power)
         for time, value in samples
-        if criteria.clearance_time_s <= time <= analysis_end_time_s
+        if criteria.analysis_start_time_s <= time <= analysis_end_time_s
     ]
     amplitude_floor = abs(pre_fault_power) * criteria.minimum_peak_relative_amplitude
     positive_peaks, negative_peaks = _same_sign_extrema(response, amplitude_floor)
