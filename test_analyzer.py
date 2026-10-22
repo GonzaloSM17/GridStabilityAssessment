@@ -3,6 +3,12 @@
 import unittest
 
 from analyzer import AnalysisPipeline, SignalStudyAnalysis, _round_up_to_nice_number
+from transfer_analysis import (
+    DampingCriteria,
+    DampingPair,
+    TransferRunAssessment,
+    TransferStudyAnalysis,
+)
 
 
 class NiceNumberTests(unittest.TestCase):
@@ -32,6 +38,38 @@ class NoStabilityAssessmentTests(unittest.TestCase):
     def test_controller_area_plots_report_a_clear_error_without_assessments(self):
         with self.assertRaisesRegex(ValueError, "No voltage-stability assessments"):
             AnalysisPipeline._stability_criteria_from(self.analysis)
+
+
+class TransferDampingPlotTests(unittest.TestCase):
+    def test_negative_damping_values_keep_the_five_percent_axis_limit(self):
+        pair = DampingPair(
+            polarity="positive",
+            first_time_s=1.2,
+            second_time_s=1.4,
+            first_amplitude=3.0,
+            second_amplitude=4.0,
+            period_s=0.2,
+            damping_ratio=-0.037,
+        )
+        assessment = TransferRunAssessment(
+            run_id=1,
+            transfer_name="NC_TEST_C1",
+            pre_fault_power=100.0,
+            final_power=90.0,
+            status="below_damping_limit",
+            damping_pairs=(pair,),
+            worst_damping_pair=pair,
+            criteria=DampingCriteria(),
+        )
+        figure = object.__new__(AnalysisPipeline).plot_transfer_damping_summary(
+            TransferStudyAnalysis((assessment,))
+        )
+        try:
+            self.assertEqual(figure.axes[0].get_xlim()[1], 5.0)
+        finally:
+            import matplotlib.pyplot as plt
+
+            plt.close(figure)
 
 
 if __name__ == "__main__":

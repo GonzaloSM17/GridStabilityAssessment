@@ -655,7 +655,12 @@ class AnalysisPipeline:
         axis.set_xlabel("Damping ratio, xi (%)")
         axis.set_ylabel("Transfer")
         lower_bound = min(0.0, min(damping_ratios) * 100.0)
-        upper_bound = max(5.0, _round_up_to_nice_number(max(damping_ratios) * 100.0))
+        largest_positive_ratio = max(0.0, max(damping_ratios) * 100.0)
+        upper_bound = (
+            max(5.0, _round_up_to_nice_number(largest_positive_ratio))
+            if largest_positive_ratio > 0.0
+            else 5.0
+        )
         axis.set_xlim(lower_bound, upper_bound)
         axis.grid(axis="x", visible=True, alpha=0.3)
         axis.legend(loc="lower right")
