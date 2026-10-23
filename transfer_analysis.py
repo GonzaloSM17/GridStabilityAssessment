@@ -54,6 +54,7 @@ class TransferRunAssessment:
     damping_pairs: tuple[DampingPair, ...]
     selected_damping_pair: DampingPair | None
     criteria: DampingCriteria
+    comment: str | None = None
 
     @property
     def damping_ratio(self) -> float | None:
@@ -148,18 +149,20 @@ def assess_transfer_damping(
         return TransferRunAssessment(
             status="inactive_pre_fault",
             dominant_frequency_hz=None,
-            warning="Transfer is inactive before the contingency.",
+            warning=None,
             damping_pairs=(),
             selected_damping_pair=None,
+            comment="Transfer is inactive before the contingency.",
             **common,
         )
     if abs(final_power) <= abs(pre_fault_power) * criteria.opened_final_power_ratio:
         return TransferRunAssessment(
             status="opened",
             dominant_frequency_hz=None,
-            warning="Transfer is open in the final operating condition.",
+            warning=None,
             damping_pairs=(),
             selected_damping_pair=None,
+            comment="Transfer is open in the final operating condition.",
             **common,
         )
 
@@ -210,6 +213,18 @@ def assess_transfer_damping(
     if not damping_pairs:
         available_duration_s = mode_samples[-1][0] - mode_samples[0][0]
         required_duration_s = 1.0 / frequency_hz
+        if available_duration_s >= required_duration_s:
+            return TransferRunAssessment(
+                status="no_identifiable_electromechanical_mode",
+                dominant_frequency_hz=frequency_hz,
+                warning=(
+                    f"A {frequency_hz:.2f} Hz candidate was found, but no two "
+                    "significant same-sign extrema were retained for damping evaluation."
+                ),
+                damping_pairs=(),
+                selected_damping_pair=None,
+                **common,
+            )
         return TransferRunAssessment(
             status="insufficient_mode_cycles",
             dominant_frequency_hz=frequency_hz,

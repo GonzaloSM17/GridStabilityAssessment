@@ -52,6 +52,7 @@ class AnalysisReport:
                 "Failed or Not Evaluated Criteria",
                 "Transfer Damping Status",
                 "Transfer Damping Warnings",
+                "Transfer Damping Comments",
             )
         )
         selected_buses = ", ".join(
@@ -68,6 +69,7 @@ class AnalysisReport:
                     "; ".join(reasons) or "-",
                     self._transfer_status_for_run(run_id),
                     "; ".join(self._transfer_failures_for_run(run_id)) or "-",
+                    "; ".join(self._transfer_comments_for_run(run_id)) or "-",
                 )
             )
 
@@ -107,7 +109,7 @@ class AnalysisReport:
     def _write_transfer_damping(self, sheet) -> None:
         sheet.append(
             (
-                "Run", "Transfer", "Pre-fault P", "Final P", "Status", "Warning",
+                "Run", "Transfer", "Pre-fault P", "Final P", "Status", "Warning", "Comment",
                 "Dominant Frequency [Hz]", "Damping [%]", "Selected Polarity",
                 "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]", "A1", "A2",
             )
@@ -117,7 +119,7 @@ class AnalysisReport:
             sheet.append(
                 (
                     self._run_name(item.run_id), item.transfer_name, item.pre_fault_power,
-                    item.final_power, item.status, item.warning, item.dominant_frequency_hz,
+                    item.final_power, item.status, item.warning, item.comment, item.dominant_frequency_hz,
                     item.damping_ratio * 100 if item.damping_ratio is not None else None,
                     pair.polarity if pair else None, pair.first_time_s if pair else None,
                     pair.second_time_s if pair else None, pair.period_s if pair else None,
@@ -158,6 +160,16 @@ class AnalysisReport:
             f"{item.transfer_name}: {item.warning}"
             for item in self.transfer_analysis.assessments
             if item.run_id == run_id and item.warning
+        )
+
+    def _transfer_comments_for_run(self, run_id: int) -> tuple[str, ...]:
+        """Return operational transfer notes without escalating the run warning status."""
+        if self.transfer_analysis is None:
+            return ()
+        return tuple(
+            f"{item.transfer_name}: {item.comment}"
+            for item in self.transfer_analysis.assessments
+            if item.run_id == run_id and item.comment
         )
 
     def _write_initialization(self, sheet) -> None:
