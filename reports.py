@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from analyzer import SignalStudyAnalysis, StudyAnalysis
+from scenario import ContingencyScenario, EvaluationProfile
 from transfer_analysis import TransferStudyAnalysis
 
 
@@ -13,6 +14,8 @@ class AnalysisReport:
 
     study_analysis: StudyAnalysis
     transfer_analysis: TransferStudyAnalysis | None = None
+    scenario: ContingencyScenario | None = None
+    profile: EvaluationProfile | None = None
 
     def write(self, output_directory: str | Path) -> Path:
         """Write the report at the root of the study analysis outputs."""
@@ -25,6 +28,8 @@ class AnalysisReport:
         initialization_sheet = workbook.create_sheet("Initialization")
         stability_sheet = workbook.create_sheet("Stability")
         criteria_sheet = workbook.create_sheet("Criteria")
+        if self.scenario is not None:
+            scenario_sheet = workbook.create_sheet("Scenario")
         if self.transfer_analysis is not None:
             transfer_summary_sheet = workbook.create_sheet("Transfer Summary")
             transfer_damping_sheet = workbook.create_sheet("Transfer Damping")
@@ -34,6 +39,8 @@ class AnalysisReport:
         self._write_initialization(initialization_sheet)
         self._write_stability(stability_sheet)
         self._write_criteria(criteria_sheet)
+        if self.scenario is not None:
+            self._write_scenario(scenario_sheet)
         if self.transfer_analysis is not None:
             self._write_transfer_summary(transfer_summary_sheet)
             self._write_transfer_damping(transfer_damping_sheet)
@@ -41,6 +48,22 @@ class AnalysisReport:
         workbook.save(output_path)
         workbook.close()
         return output_path
+
+    def _write_scenario(self, sheet) -> None:
+        """Document the physical contingency and operating state under evaluation."""
+        sheet.append(("Field", "Value"))
+        values = (
+            ("Name", self.scenario.name),
+            ("Severity", self.scenario.severity),
+            ("Fault type", self.scenario.fault_type),
+            ("Fault time [s]", self.scenario.fault_time_s),
+            ("Clearance time [s]", self.scenario.clearance_time_s),
+            ("Location", self.scenario.location or "-"),
+            ("Operating state", self.scenario.operating_state),
+        )
+        for value in values:
+            sheet.append(value)
+        self._format_sheet(sheet)
 
     def _write_summary(self, sheet) -> None:
         """Write one consolidated selected-bus status row for every run."""
@@ -330,6 +353,8 @@ class AnalysisReport:
 
     def _initialization_criteria(self, voltage_analysis: SignalStudyAnalysis):
         if not voltage_analysis.run_results:
+            if self.profile is not None:
+                return self.profile.initialization_criteria
             from signal_analysis import InitializationCriteria
 
             return InitializationCriteria()
@@ -339,6 +364,8 @@ class AnalysisReport:
         for result in voltage_analysis.run_results:
             if result.stability is not None:
                 return result.stability.criteria
+        if self.profile is not None:
+            return self.profile.voltage_criteria
         from signal_analysis import StabilityCriteria
 
         return StabilityCriteria()

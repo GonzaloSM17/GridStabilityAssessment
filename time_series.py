@@ -92,6 +92,23 @@ class TimeSeriesDataset:
             .collect()
         )
 
+    def maximum_time_s(self) -> float:
+        """Return the final simulation time without loading any signal series."""
+        if self.time_column is None:
+            self.inspect()
+
+        import polars as pl
+
+        maximum_time = (
+            pl.scan_parquet(self.parquet_path)
+            .select(pl.col(self.time_column).max().alias("maximum_time"))
+            .collect()
+            .item(0, "maximum_time")
+        )
+        if maximum_time is None:
+            raise ValueError(f"Dataset contains no time samples: {self.parquet_path}")
+        return float(maximum_time)
+
     def read_series_group(self, names: list[str] | tuple[str, ...]):
         """Read time and several named series without applying a time window."""
         series = [self.get_series(name) for name in names]

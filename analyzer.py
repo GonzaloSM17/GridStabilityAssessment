@@ -12,6 +12,11 @@ from signal_analysis import (
     assess_stability,
 )
 from signals import Measurement, VOLTAGE_RMS
+from scenario import (
+    DEFAULT_CONTINGENCY_SCENARIO,
+    ContingencyScenario,
+    EvaluationProfile,
+)
 from study import MonteCarloStudy
 from transfer_analysis import (
     DampingCriteria,
@@ -347,8 +352,23 @@ class StudyAnalysis:
 class AnalysisPipeline:
     """Execute reusable analyses for one fully configured Monte Carlo study."""
 
-    def __init__(self, study: MonteCarloStudy) -> None:
+    def __init__(
+        self,
+        study: MonteCarloStudy,
+        scenario: ContingencyScenario | None = None,
+        profile: EvaluationProfile | None = None,
+    ) -> None:
+        if scenario is not None and profile is not None:
+            raise ValueError("Provide either a scenario or an evaluation profile, not both.")
         self.study = study
+        self.profile = profile or EvaluationProfile.for_scenario(
+            scenario or DEFAULT_CONTINGENCY_SCENARIO
+        )
+
+    @property
+    def scenario(self) -> ContingencyScenario:
+        """Return the contingency scenario used by every pipeline operation."""
+        return self.profile.scenario
 
     @property
     def context(self):
@@ -419,7 +439,7 @@ class AnalysisPipeline:
         criteria: DampingCriteria | None = None,
     ) -> TransferStudyAnalysis:
         """Assess every explicitly published active-power transfer in every run."""
-        criteria = criteria or DampingCriteria()
+        criteria = criteria or self.profile.transfer_damping_criteria
         transfers = self.study.power_transfers
         columns = tuple(transfer.column_name for transfer in transfers)
         assessments = []
@@ -450,7 +470,7 @@ class AnalysisPipeline:
         self,
         *,
         start_time_s: float = 0.9,
-        end_time_s: float = 3.0,
+        end_time_s: float | None = None,
         transfer_analysis: TransferStudyAnalysis | None = None,
     ):
         """Plot every published active-power transfer over a common time window.
@@ -459,8 +479,7 @@ class AnalysisPipeline:
         runs are shown lightly and their pointwise median is emphasized. No
         transfer stability or damping decision is made here.
         """
-        if start_time_s >= end_time_s:
-            raise ValueError("The transfer-view start must precede its end.")
+        end_time_s = self._transfer_plot_end_time(start_time_s, end_time_s)
         transfers = self.study.power_transfers
         if not transfers:
             raise ValueError("No PQ_* active-power transfer monitors were found.")
@@ -507,7 +526,7 @@ class AnalysisPipeline:
             sharex=True,
         )
         axes = np.asarray(axes).reshape(-1)
-        criteria = StabilityCriteria()
+        criteria = self.profile.voltage_criteria
         assessment_by_key = {
             (assessment.run_id, assessment.transfer_name): assessment
             for assessment in (transfer_analysis.assessments if transfer_analysis else ())
@@ -594,7 +613,8 @@ class AnalysisPipeline:
             frameon=False,
         )
         figure.suptitle(
-            f"Active-power transfer overview ({start_time_s:.1f}-{end_time_s:.1f} s)"
+            f"500 kV transmission-system active-power transfers "
+            f"({start_time_s:.1f}-{end_time_s:.1f} s)"
         )
         figure.subplots_adjust(
             left=0.06,
@@ -651,7 +671,7 @@ class AnalysisPipeline:
         axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2, label="5% limit")
         axis.set_yticks(range(len(evaluated_transfer_names)), labels)
         axis.set_xlabel("Damping ratio, xi (%)")
-        axis.set_ylabel("Transfer")
+        axis.set_ylabel("500 kV transmission system")
         lower_bound = min(0.0, min(damping_ratios) * 100.0)
         largest_positive_ratio = max(0.0, max(damping_ratios) * 100.0)
         upper_bound = (
@@ -683,7 +703,7 @@ class AnalysisPipeline:
                 va="bottom",
                 fontsize=8,
             )
-        figure.suptitle("Transfer damping by Monte Carlo run")
+        figure.suptitle("Power Transfer Damping")
         figure.tight_layout(rect=(0.0, 0.06 if excluded_transfer_count else 0.0, 1.0, 0.95))
         return figure
 
@@ -692,12 +712,13 @@ class AnalysisPipeline:
         analysis: TransferStudyAnalysis,
         *,
         start_time_s: float = 1.12,
-        end_time_s: float = 3.0,
+        end_time_s: float | None = None,
     ):
         """Plot the lowest selected dominant-mode damping case per transfer."""
         import matplotlib.pyplot as plt
         import numpy as np
 
+        end_time_s = self._transfer_plot_end_time(start_time_s, end_time_s)
         lowest_assessments = []
         for transfer_name in analysis.transfer_names:
             assessed = [
@@ -714,7 +735,7 @@ class AnalysisPipeline:
         run_by_id = {run.run_id: run for run in self.context.runs}
         columns = 3
         rows = ceil(len(lowest_assessments) / columns)
-        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.8 * rows), sharex=True)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.9 * rows), sharex=True)
         axes = np.asarray(axes).reshape(-1)
         for axis, assessment in zip(axes, lowest_assessments):
             transfer = transfer_by_name[assessment.transfer_name]
@@ -744,7 +765,9 @@ class AnalysisPipeline:
             axis.set_title(
                 f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
                 f"f={assessment.dominant_frequency_hz:.2f} Hz | "
-                f"xi={assessment.damping_ratio * 100:.2f}%"
+                f"xi={assessment.damping_ratio * 100:.2f}%",
+                fontsize=8.5,
+                pad=8,
             )
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
@@ -755,9 +778,39 @@ class AnalysisPipeline:
         for axis in axes[-columns:]:
             if axis.get_visible():
                 axis.set_xlabel("Time (s)")
-        figure.suptitle("Lowest selected dominant-mode damping case by transfer")
-        figure.tight_layout()
+        figure.suptitle(
+            "Lowest Selected Dominant-Mode Damping Case by 500 kV Transmission System",
+            y=0.985,
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.985,
+            bottom=0.07,
+            top=0.92,
+            hspace=0.48,
+            wspace=0.22,
+        )
         return figure
+
+    def _transfer_plot_end_time(
+        self,
+        start_time_s: float,
+        requested_end_time_s: float | None,
+    ) -> float:
+        """Return a common transfer horizon, capped at five simulation seconds."""
+        available_end_times = [
+            run.dataset.maximum_time_s()
+            for run in self.context.runs
+            if run.dataset is not None
+        ]
+        if not available_end_times:
+            raise ValueError("No transfer dataset is available for plotting.")
+        end_time_s = min(5.0, min(available_end_times))
+        if requested_end_time_s is not None:
+            end_time_s = min(end_time_s, requested_end_time_s)
+        if start_time_s >= end_time_s:
+            raise ValueError("The transfer-view start must precede its end.")
+        return end_time_s
 
     def plot_controller_population(
         self,
@@ -1187,8 +1240,8 @@ class AnalysisPipeline:
             )
 
         signal_name = measurement.column_name
-        initialization_criteria = initialization_criteria or InitializationCriteria()
-        stability_criteria = stability_criteria or StabilityCriteria()
+        initialization_criteria = initialization_criteria or self.profile.initialization_criteria
+        stability_criteria = stability_criteria or self.profile.voltage_criteria
 
         run_results: list[RunSignalAnalysis] = []
         skipped_run_ids: list[int] = []
@@ -1259,7 +1312,7 @@ class AnalysisPipeline:
         criteria = (
             analysis.run_results[0].initialization.criteria
             if analysis.run_results
-            else InitializationCriteria()
+            else self.profile.initialization_criteria
         )
         severity_by_run_id = {
             result.run_id: result.initialization.fast_relative_error_percentile_99
@@ -1440,7 +1493,7 @@ class AnalysisPipeline:
         }
         criteria = next(
             (assessment.criteria for assessment in completed_assessments.values()),
-            StabilityCriteria(),
+            self.profile.voltage_criteria,
         )
         crisis_deadline_time_s = (
             criteria.clearance_time_s + criteria.post_clearance_grace_period_s
@@ -1587,7 +1640,7 @@ class AnalysisPipeline:
                 for result in analysis.run_results
                 if result.stability is not None
             ),
-            StabilityCriteria(),
+            self.profile.voltage_criteria,
         )
         area_by_run_id = {
             result.run_id: result.stability.unified_response_area_pu_s

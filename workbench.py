@@ -6,6 +6,7 @@ from analyzer import AnalysisPipeline, BusStudyAnalysis, StudyAnalysis
 from assets import Assets
 from context import MonteCarloContext
 from reports import AnalysisReport
+from scenario import ContingencyScenario, EvaluationProfile
 from signals import VOLTAGE_RMS
 from study import MonteCarloStudy
 
@@ -17,10 +18,12 @@ class MonteCarloWorkbench:
         self,
         context_path: str | Path | None = None,
         assets_path: str | Path | None = None,
+        scenario: ContingencyScenario | None = None,
+        profile: EvaluationProfile | None = None,
     ) -> None:
         self.study: MonteCarloStudy | None = None
         self._pipeline: AnalysisPipeline | None = None
-        self.open_study(context_path, assets_path)
+        self.open_study(context_path, assets_path, scenario, profile)
 
     @property
     def pipeline(self) -> AnalysisPipeline:
@@ -33,6 +36,8 @@ class MonteCarloWorkbench:
         self,
         context_path: str | Path | None = None,
         assets_path: str | Path | None = None,
+        scenario: ContingencyScenario | None = None,
+        profile: EvaluationProfile | None = None,
     ) -> AnalysisPipeline:
         """Open explicit inputs or request and validate missing inputs through Tk."""
         if context_path is None:
@@ -45,7 +50,7 @@ class MonteCarloWorkbench:
 
         assets = Assets(assets_path)
         self.study = MonteCarloStudy(context, assets)
-        self._pipeline = AnalysisPipeline(self.study)
+        self._pipeline = AnalysisPipeline(self.study, scenario, profile)
         return self._pipeline
 
     @staticmethod
@@ -146,7 +151,12 @@ class MonteCarloWorkbench:
 
         self._publish_transfer_analysis(transfer_analysis)
 
-        AnalysisReport(study_analysis, transfer_analysis).write(
+        AnalysisReport(
+            study_analysis,
+            transfer_analysis,
+            scenario=self.pipeline.scenario,
+            profile=self.pipeline.profile,
+        ).write(
             self.analysis_output_directory()
         )
 
@@ -161,7 +171,7 @@ class MonteCarloWorkbench:
         self,
         *,
         start_time_s: float = 0.9,
-        end_time_s: float = 3.0,
+        end_time_s: float | None = None,
         show_figure: bool = True,
     ) -> Path:
         """Calculate and publish transfer damping figures without bus analysis."""
@@ -182,7 +192,7 @@ class MonteCarloWorkbench:
         transfer_analysis,
         *,
         start_time_s: float = 0.9,
-        end_time_s: float = 3.0,
+        end_time_s: float | None = None,
     ) -> tuple[Path, ...]:
         """Publish the overview, damping distribution, and worst-case evidence."""
         output_directory = self.analysis_output_directory() / "03_transfers"
