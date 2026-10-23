@@ -14,6 +14,7 @@ class DampingCriteria:
     fault_time_s: float = 1.0
     clearance_time_s: float = 1.12
     post_clearance_guard_time_s: float = 0.05
+    analysis_start_time_s: float = 2.0
     final_reference_duration_s: float = 1.0
     minimum_simulation_end_time_s: float = 5.0
     minimum_pre_fault_power: float = 1.0
@@ -22,9 +23,9 @@ class DampingCriteria:
     mode_maximum_frequency_hz: float = 2.0
     mode_filter_half_width_hz: float = 0.25
     minimum_peak_relative_amplitude: float = 0.02
-    dominant_pair_amplitude_fraction: float = 0.50
-    late_mode_start_time_s: float = 2.0
     minimum_damping_ratio: float = 0.05
+    growth_confirmation_peak_count: int = 3
+    growth_confirmation_amplitude_ratio: float = 1.05
 
 
 @dataclass(frozen=True)
@@ -66,9 +67,21 @@ class TransferRunAssessment:
     @property
     def is_compliant(self) -> bool | None:
         """Return the 5-percent compliance result when the mode is evaluable."""
-        if self.damping_ratio is None:
+        if self.status == "not_evaluated" or self.damping_ratio is None:
             return None
-        return self.damping_ratio >= self.criteria.minimum_damping_ratio
+        return self.status == "compliant"
+
+    @property
+    def classification(self) -> str:
+        """Return the human-readable damping conclusion for this transfer."""
+        return {
+            "compliant": "Compliant",
+            "under_damped": "Under-damped",
+            "growing_mode": "Growing mode",
+            "not_evaluated": "Not evaluated",
+            "inactive_pre_fault": "Not applicable",
+            "opened": "Not applicable",
+        }[self.status]
 
 
 @dataclass(frozen=True)
@@ -166,7 +179,10 @@ def assess_transfer_damping(
             **common,
         )
 
-    mode_start_time_s = criteria.clearance_time_s + criteria.post_clearance_guard_time_s
+    mode_start_time_s = max(
+        criteria.analysis_start_time_s,
+        criteria.clearance_time_s + criteria.post_clearance_guard_time_s,
+    )
     mode_samples = [
         (time, value - final_power)
         for time, value in samples
@@ -175,7 +191,7 @@ def assess_transfer_damping(
     frequency_hz, filtered_response = _isolate_dominant_mode(mode_samples, criteria)
     if frequency_hz is None or filtered_response is None:
         return TransferRunAssessment(
-            status="no_identifiable_electromechanical_mode",
+            status="not_evaluated",
             dominant_frequency_hz=None,
             warning=(
                 "No dominant electromechanical mode was identified within "
@@ -215,7 +231,7 @@ def assess_transfer_damping(
         required_duration_s = 1.0 / frequency_hz
         if available_duration_s >= required_duration_s:
             return TransferRunAssessment(
-                status="no_identifiable_electromechanical_mode",
+                status="not_evaluated",
                 dominant_frequency_hz=frequency_hz,
                 warning=(
                     f"A {frequency_hz:.2f} Hz candidate was found, but no two "
@@ -226,7 +242,7 @@ def assess_transfer_damping(
                 **common,
             )
         return TransferRunAssessment(
-            status="insufficient_mode_cycles",
+            status="not_evaluated",
             dominant_frequency_hz=frequency_hz,
             warning=(
                 f"Dominant mode {frequency_hz:.2f} Hz needs at least "
@@ -238,27 +254,42 @@ def assess_transfer_damping(
             **common,
         )
 
-    selected_pair = _select_dominant_pair(damping_pairs, criteria)
-    warning = None
-    if selected_pair.first_time_s > criteria.late_mode_start_time_s:
-        warning = (
-            f"The selected {frequency_hz:.2f} Hz mode begins late "
-            f"at {selected_pair.first_time_s:.2f} s."
+    initial_polarity = _initial_response_polarity(mode_samples, amplitude_floor)
+    selected_pair = _select_initial_polarity_pair(damping_pairs, initial_polarity)
+    if selected_pair is None:
+        return TransferRunAssessment(
+            status="not_evaluated",
+            dominant_frequency_hz=frequency_hz,
+            warning=(
+                "No same-sign damping pair is available for the initial "
+                f"{initial_polarity or 'meaningful'} response direction."
+            ),
+            damping_pairs=damping_pairs,
+            selected_damping_pair=None,
+            **common,
         )
-    if selected_pair.damping_ratio < 0.0:
-        status = "warning_growing_mode"
-        warning = _append_warning(
-            warning,
-            "The selected dominant-mode envelope grows between the measured extrema.",
+    if selected_pair.damping_ratio < 0.0 and _has_confirmed_growth(
+        damping_pairs,
+        selected_pair,
+        criteria,
+    ):
+        status = "growing_mode"
+        warning = (
+            "The selected dominant-mode envelope grows consistently across "
+            f"{criteria.growth_confirmation_peak_count} same-sign extrema."
+        )
+    elif selected_pair.damping_ratio <= 0.0:
+        status = "not_evaluated"
+        warning = (
+            "An isolated non-decaying peak pair was found, but growing behavior "
+            "was not confirmed across the mode envelope."
         )
     elif selected_pair.damping_ratio < criteria.minimum_damping_ratio:
-        status = "warning_below_damping_limit"
-        warning = _append_warning(
-            warning,
-            f"Damping is below the {criteria.minimum_damping_ratio * 100:.0f}% limit.",
-        )
+        status = "under_damped"
+        warning = f"Damping is below the {criteria.minimum_damping_ratio * 100:.0f}% limit."
     else:
-        status = "pass"
+        status = "compliant"
+        warning = None
 
     return TransferRunAssessment(
         status=status,
@@ -275,8 +306,12 @@ def _validate_criteria(criteria: DampingCriteria) -> None:
         raise ValueError("The electromechanical mode frequency limits are invalid.")
     if criteria.post_clearance_guard_time_s < 0.0:
         raise ValueError("The post-clearance guard time cannot be negative.")
-    if not 0.0 < criteria.dominant_pair_amplitude_fraction <= 1.0:
-        raise ValueError("The dominant-pair amplitude fraction must be in (0, 1].")
+    if criteria.analysis_start_time_s < criteria.clearance_time_s:
+        raise ValueError("Damping analysis must not start before contingency clearance.")
+    if criteria.growth_confirmation_peak_count < 3:
+        raise ValueError("Growing-mode confirmation requires at least three extrema.")
+    if criteria.growth_confirmation_amplitude_ratio <= 1.0:
+        raise ValueError("The growing-mode confirmation ratio must exceed one.")
 
 
 def _isolate_dominant_mode(
@@ -393,25 +428,53 @@ def _damping_pairs(
     return pairs
 
 
-def _select_dominant_pair(
+def _initial_response_polarity(
+    samples: Sequence[tuple[float, float]],
+    amplitude_floor: float,
+) -> str | None:
+    """Return the first meaningful deviation polarity from final transfer power."""
+    for _, response in samples:
+        if abs(response) >= amplitude_floor:
+            return "positive" if response > 0.0 else "negative"
+    return None
+
+
+def _select_initial_polarity_pair(
     pairs: Sequence[DampingPair],
-    criteria: DampingCriteria,
-) -> DampingPair:
-    """Choose the largest first excursion representative of the dominant mode."""
-    maximum_amplitude = max(
-        max(pair.first_amplitude, pair.second_amplitude) for pair in pairs
-    )
-    representative_pairs = [
-        pair
-        for pair in pairs
-        if max(pair.first_amplitude, pair.second_amplitude)
-        >= criteria.dominant_pair_amplitude_fraction * maximum_amplitude
+    initial_polarity: str | None,
+) -> DampingPair | None:
+    """Use the first valid pair matching the initial response direction only."""
+    matching_pairs = [
+        pair for pair in pairs if pair.polarity == initial_polarity
     ]
-    return max(
-        representative_pairs,
-        key=lambda pair: (pair.first_amplitude, -pair.first_time_s),
+    if not matching_pairs:
+        return None
+    return min(matching_pairs, key=lambda pair: pair.first_time_s)
+
+
+def _has_confirmed_growth(
+    pairs: Sequence[DampingPair],
+    selected_pair: DampingPair,
+    criteria: DampingCriteria,
+) -> bool:
+    """Confirm growth using consecutive same-sign extrema, not one peak pair."""
+    polarity_pairs = sorted(
+        (pair for pair in pairs if pair.polarity == selected_pair.polarity),
+        key=lambda pair: pair.first_time_s,
     )
-
-
-def _append_warning(existing_warning: str | None, addition: str) -> str:
-    return f"{existing_warning} {addition}" if existing_warning else addition
+    selected_index = polarity_pairs.index(selected_pair)
+    consecutive_amplitudes = [selected_pair.first_amplitude, selected_pair.second_amplitude]
+    previous_pair = selected_pair
+    for pair in polarity_pairs[selected_index + 1 :]:
+        if abs(pair.first_time_s - previous_pair.second_time_s) > 1e-9:
+            break
+        consecutive_amplitudes.append(pair.second_amplitude)
+        previous_pair = pair
+        if len(consecutive_amplitudes) >= criteria.growth_confirmation_peak_count:
+            break
+    if len(consecutive_amplitudes) < criteria.growth_confirmation_peak_count:
+        return False
+    return all(
+        later >= earlier * criteria.growth_confirmation_amplitude_ratio
+        for earlier, later in zip(consecutive_amplitudes, consecutive_amplitudes[1:])
+    )

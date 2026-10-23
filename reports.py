@@ -9,6 +9,14 @@ from transfer_analysis import TransferStudyAnalysis
 
 
 @dataclass(frozen=True)
+class TransferDampingRunSummary:
+    """One run's consolidated active-transfer damping conclusion."""
+
+    status: str
+    findings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AnalysisReport:
     """Write selected bus analyses and their consolidated run result."""
 
@@ -33,7 +41,7 @@ class AnalysisReport:
         if self.transfer_analysis is not None:
             transfer_summary_sheet = workbook.create_sheet("Transfer Summary")
             transfer_damping_sheet = workbook.create_sheet("Transfer Damping")
-            damping_pairs_sheet = workbook.create_sheet("Damping Pairs")
+            damping_pairs_sheet = workbook.create_sheet("Candidate Damping Pairs")
 
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
@@ -66,16 +74,16 @@ class AnalysisReport:
         self._format_sheet(sheet)
 
     def _write_summary(self, sheet) -> None:
-        """Write one consolidated selected-bus status row for every run."""
+        """Write separate voltage and transfer-damping conclusions per run."""
         sheet.append(
             (
                 "Run",
-                "Overall Status",
+                "Overall Assessment",
+                "Voltage Stability",
                 "Selected Buses",
-                "Failed or Not Evaluated Criteria",
-                "Transfer Damping Status",
-                "Transfer Damping Warnings",
-                "Transfer Damping Comments",
+                "Voltage Findings",
+                "Transfer Damping",
+                "Transfer Damping Findings",
             )
         )
         selected_buses = ", ".join(
@@ -83,16 +91,18 @@ class AnalysisReport:
             for bus_analysis in self.study_analysis.bus_analyses
         )
         for run_id in self.study_analysis.run_ids:
-            reasons = self.study_analysis.reasons_for_run(run_id)
+            voltage_status = self.study_analysis.status_for_run(run_id)
+            voltage_findings = self.study_analysis.reasons_for_run(run_id)
+            damping = self._transfer_damping_summary_for_run(run_id)
             sheet.append(
                 (
                     self._run_name(run_id),
-                    self.study_analysis.status_for_run(run_id),
+                    self._overall_assessment(voltage_status, damping.status),
+                    voltage_status,
                     selected_buses,
-                    "; ".join(reasons) or "-",
-                    self._transfer_status_for_run(run_id),
-                    "; ".join(self._transfer_failures_for_run(run_id)) or "-",
-                    "; ".join(self._transfer_comments_for_run(run_id)) or "-",
+                    "; ".join(voltage_findings) or "-",
+                    damping.status,
+                    "; ".join(damping.findings) or "-",
                 )
             )
 
@@ -101,30 +111,41 @@ class AnalysisReport:
     def _write_transfer_summary(self, sheet) -> None:
         sheet.append(
             (
-                "Transfer", "Mode Evaluations", "Opened Runs", "No Identifiable Mode Runs",
-                "Insufficient Cycles Runs", "Minimum Selected Damping [%]",
-                "P05 Damping [%]", "Warning Runs",
+                "Transfer", "Compliant Runs", "Under-damped Runs", "Growing-mode Runs", "Not Evaluated Runs",
+                "Minimum Selected Damping [%]", "P05 Damping [%]",
             )
         )
         import numpy as np
 
         for transfer_name in self.transfer_analysis.transfer_names:
             assessments = self.transfer_analysis.assessments_for_transfer(transfer_name)
-            damping = [item.damping_ratio for item in assessments if item.damping_ratio is not None]
-            warnings = [item for item in assessments if item.warning]
+            active_assessments = [
+                item
+                for item in assessments
+                if item.status not in {"opened", "inactive_pre_fault"}
+            ]
+            if not active_assessments:
+                continue
+            damping = [
+                item.damping_ratio
+                for item in active_assessments
+                if item.damping_ratio is not None
+            ]
+            compliant = [item for item in active_assessments if item.status == "compliant"]
+            under_damped = [item for item in active_assessments if item.status == "under_damped"]
+            growing_mode = [item for item in active_assessments if item.status == "growing_mode"]
+            not_evaluable = [
+                item for item in active_assessments if item.status == "not_evaluated"
+            ]
             sheet.append(
                 (
                     transfer_name,
-                    len(damping),
-                    sum(item.status == "opened" for item in assessments),
-                    sum(
-                        item.status == "no_identifiable_electromechanical_mode"
-                        for item in assessments
-                    ),
-                    sum(item.status == "insufficient_mode_cycles" for item in assessments),
+                    len(compliant),
+                    len(under_damped),
+                    len(growing_mode),
+                    len(not_evaluable),
                     min(damping) * 100 if damping else None,
                     float(np.quantile(damping, 0.05)) * 100 if damping else None,
-                    ", ".join(self._run_name(item.run_id) for item in warnings) or "-",
                 )
             )
         self._format_transfer_sheet(sheet)
@@ -132,68 +153,108 @@ class AnalysisReport:
     def _write_transfer_damping(self, sheet) -> None:
         sheet.append(
             (
-                "Run", "Transfer", "Pre-fault P", "Final P", "Status", "Warning", "Comment",
+                "Run", "Transfer", "Pre-fault P", "Permanent P", "Status", "Warning", "Comment",
                 "Dominant Frequency [Hz]", "Damping [%]", "Selected Polarity",
-                "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]", "A1", "A2",
+                "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]",
+                "P1", "P2", "A1", "A2", "A2 / A1",
             )
         )
         for item in self.transfer_analysis.assessments:
             pair = item.selected_damping_pair
+            direction = 1.0 if pair and pair.polarity == "positive" else -1.0
+            first_peak_power = (
+                item.final_power + direction * pair.first_amplitude if pair else None
+            )
+            second_peak_power = (
+                item.final_power + direction * pair.second_amplitude if pair else None
+            )
             sheet.append(
                 (
                     self._run_name(item.run_id), item.transfer_name, item.pre_fault_power,
-                    item.final_power, item.status, item.warning, item.comment, item.dominant_frequency_hz,
+                    item.final_power, item.classification, item.warning, item.comment, item.dominant_frequency_hz,
                     item.damping_ratio * 100 if item.damping_ratio is not None else None,
                     pair.polarity if pair else None, pair.first_time_s if pair else None,
                     pair.second_time_s if pair else None, pair.period_s if pair else None,
+                    first_peak_power, second_peak_power,
                     pair.first_amplitude if pair else None, pair.second_amplitude if pair else None,
+                    pair.second_amplitude / pair.first_amplitude if pair else None,
                 )
             )
         self._format_transfer_sheet(sheet)
 
     def _write_damping_pairs(self, sheet) -> None:
-        sheet.append(("Run", "Transfer", "Polarity", "Peak 1 Time [s]", "Peak 2 Time [s]", "A1", "A2", "Period [s]", "Damping [%]"))
+        sheet.append(("Run", "Transfer", "Selected", "Polarity", "Peak 1 Time [s]", "Peak 2 Time [s]", "A1", "A2", "Period [s]", "Damping [%]"))
         for item in self.transfer_analysis.assessments:
             for pair in item.damping_pairs:
-                sheet.append((self._run_name(item.run_id), item.transfer_name, pair.polarity, pair.first_time_s, pair.second_time_s, pair.first_amplitude, pair.second_amplitude, pair.period_s, pair.damping_ratio * 100))
+                sheet.append((
+                    self._run_name(item.run_id),
+                    item.transfer_name,
+                    pair == item.selected_damping_pair,
+                    pair.polarity,
+                    pair.first_time_s,
+                    pair.second_time_s,
+                    pair.first_amplitude,
+                    pair.second_amplitude,
+                    pair.period_s,
+                    pair.damping_ratio * 100,
+                ))
         self._format_transfer_sheet(sheet)
 
-    def _transfer_status_for_run(self, run_id: int) -> str:
+    def _transfer_damping_summary_for_run(self, run_id: int) -> TransferDampingRunSummary:
+        """Return only actionable active-transfer damping findings for one run."""
         if self.transfer_analysis is None:
-            return "Not evaluated"
-        assessments = [item for item in self.transfer_analysis.assessments if item.run_id == run_id]
-        if any(item.status == "warning_growing_mode" for item in assessments):
-            return "Warning: growing mode"
-        if any(item.status == "warning_below_damping_limit" for item in assessments):
-            return "Warning: damping below limit"
-        if any(item.status == "insufficient_mode_cycles" for item in assessments):
-            return "Warning: insufficient mode cycles"
-        if any(item.status == "no_identifiable_electromechanical_mode" for item in assessments):
-            return "Warning: no identifiable mode"
-        if any(item.warning for item in assessments):
-            return "Pass with warning"
-        if any(item.status == "pass" for item in assessments):
-            return "Pass"
+            return TransferDampingRunSummary("Not evaluated", ())
+        assessments = [
+            item
+            for item in self.transfer_analysis.assessments
+            if item.run_id == run_id
+            and item.status not in {"opened", "inactive_pre_fault"}
+        ]
+        if not assessments:
+            return TransferDampingRunSummary("Not applicable", ())
+        growing_mode = [item for item in assessments if item.status == "growing_mode"]
+        under_damped = [item for item in assessments if item.status == "under_damped"]
+        not_evaluable = [item for item in assessments if item.status == "not_evaluated"]
+        findings = [
+            "Growing mode: "
+            + ", ".join(
+                f"{item.transfer_name} ({item.damping_ratio * 100:.2f}%)"
+                for item in growing_mode
+            )
+        ] if growing_mode else []
+        if under_damped:
+            findings.append(
+                "Under-damped: "
+                + ", ".join(
+                    f"{item.transfer_name} ({item.damping_ratio * 100:.2f}%)"
+                    for item in under_damped
+                )
+            )
+        if not_evaluable:
+            findings.append(
+                "Not evaluated: "
+                + ", ".join(item.transfer_name for item in not_evaluable)
+            )
+        if growing_mode:
+            status = "Growing mode"
+        elif not_evaluable:
+            status = "Not evaluated"
+        elif under_damped:
+            status = "Under-damped"
+        else:
+            status = "Compliant"
+        return TransferDampingRunSummary(status, tuple(findings))
+
+    @staticmethod
+    def _overall_assessment(voltage_status: str, damping_status: str) -> str:
+        """Combine separate voltage and damping conclusions without hiding either."""
+        if voltage_status == "Stable" and damping_status == "Compliant":
+            return "Fully compliant"
+        if voltage_status == "Stable" and damping_status == "Under-damped":
+            return "Stable with under-damping"
+        if voltage_status == "Unstable" or damping_status == "Growing mode":
+            return "Non-compliant"
         return "Not evaluated"
-
-    def _transfer_failures_for_run(self, run_id: int) -> tuple[str, ...]:
-        if self.transfer_analysis is None:
-            return ()
-        return tuple(
-            f"{item.transfer_name}: {item.warning}"
-            for item in self.transfer_analysis.assessments
-            if item.run_id == run_id and item.warning
-        )
-
-    def _transfer_comments_for_run(self, run_id: int) -> tuple[str, ...]:
-        """Return operational transfer notes without escalating the run warning status."""
-        if self.transfer_analysis is None:
-            return ()
-        return tuple(
-            f"{item.transfer_name}: {item.comment}"
-            for item in self.transfer_analysis.assessments
-            if item.run_id == run_id and item.comment
-        )
 
     def _write_initialization(self, sheet) -> None:
         sheet.append(
@@ -342,6 +403,19 @@ class AnalysisReport:
                         "Transfer damping",
                         "Post-clearance guard time [s]",
                         transfer_criteria.post_clearance_guard_time_s,
+                    ),
+                    (
+                        "Transfer damping",
+                        "Analysis start time [s]",
+                        transfer_criteria.analysis_start_time_s,
+                    ),
+                    (
+                        "Transfer damping",
+                        "Growing-mode confirmation",
+                        (
+                            f"{transfer_criteria.growth_confirmation_peak_count} consecutive extrema, "
+                            f"each at least {((transfer_criteria.growth_confirmation_amplitude_ratio - 1) * 100):.0f}% larger"
+                        ),
                     ),
                     ("Transfer damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
                 )

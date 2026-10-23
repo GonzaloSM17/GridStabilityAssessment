@@ -53,7 +53,7 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.status, "compliant")
         self.assertAlmostEqual(result.dominant_frequency_hz, 1.0, delta=0.3)
         self.assertIsNotNone(result.selected_damping_pair)
         self.assertAlmostEqual(result.damping_ratio, 0.10, delta=0.03)
@@ -67,8 +67,19 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.status, "compliant")
         self.assertEqual(result.selected_damping_pair.polarity, "negative")
+
+    def test_positive_initial_excursion_uses_same_sign_peaks(self):
+        result = assess_transfer_damping(
+            self.time,
+            self.power_with_mode(starts_negative=False),
+            run_id=1,
+            transfer_name="NC_TEST_C1",
+        )
+
+        self.assertEqual(result.status, "compliant")
+        self.assertEqual(result.selected_damping_pair.polarity, "positive")
 
     def test_fast_ripple_is_not_an_electromechanical_mode(self):
         values = []
@@ -89,8 +100,20 @@ class TransferDampingTests(unittest.TestCase):
         self.assertIsNone(result.damping_ratio)
         self.assertIn(
             result.status,
-            {"no_identifiable_electromechanical_mode", "insufficient_mode_cycles"},
+            {"not_evaluated"},
         )
+
+    def test_classifies_positive_but_low_damping_as_under_damped(self):
+        result = assess_transfer_damping(
+            self.time,
+            self.power_with_mode(damping_ratio=0.02),
+            run_id=1,
+            transfer_name="NC_TEST_C1",
+        )
+
+        self.assertEqual(result.status, "under_damped")
+        self.assertGreater(result.damping_ratio, 0.0)
+        self.assertLess(result.damping_ratio, 0.05)
 
     def test_opened_transfer_is_not_a_damping_warning(self):
         values = [100.0 if time < 1.0 else 0.0 for time in self.time]

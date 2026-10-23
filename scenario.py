@@ -52,6 +52,7 @@ class EvaluationProfile:
         initialization_window_duration_s = 0.5
         pre_fault_power_window_duration_s = 0.1
         response_window_after_clearance_s = 2.0 - 1.12
+        damping_start_after_clearance_s = 2.0 - 1.12
         return cls(
             scenario=scenario,
             initialization_criteria=InitializationCriteria(
@@ -74,6 +75,9 @@ class EvaluationProfile:
                 ),
                 fault_time_s=scenario.fault_time_s,
                 clearance_time_s=scenario.clearance_time_s,
+                analysis_start_time_s=(
+                    scenario.clearance_time_s + damping_start_after_clearance_s
+                ),
             ),
         )
 

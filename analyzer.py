@@ -562,8 +562,7 @@ class AnalysisPipeline:
                     elif assessment.status in {
                         "opened",
                         "inactive_pre_fault",
-                        "no_identifiable_electromechanical_mode",
-                        "insufficient_mode_cycles",
+                        "not_evaluated",
                     }:
                         color = "#9E9E9E"
                 axis.plot(
@@ -687,8 +686,7 @@ class AnalysisPipeline:
             item.status in {
                 "opened",
                 "inactive_pre_fault",
-                "no_identifiable_electromechanical_mode",
-                "insufficient_mode_cycles",
+                "not_evaluated",
             }
             for item in analysis.assessments
         )
@@ -697,7 +695,7 @@ class AnalysisPipeline:
                 0.5,
                 0.01,
                 f"{excluded_transfer_count} transfer(s), {excluded_run_count} run assessment(s) "
-                "excluded from xi distribution: opened, inactive, insufficient cycles, or no identifiable mode. "
+                "excluded from xi distribution: opened, inactive, or not evaluated. "
                 "See Transfer Summary in the report.",
                 ha="center",
                 va="bottom",

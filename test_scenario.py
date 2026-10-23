@@ -27,6 +27,7 @@ class EvaluationProfileTests(unittest.TestCase):
         self.assertEqual(profile.transfer_damping_criteria.fault_time_s, 2.0)
         self.assertEqual(profile.transfer_damping_criteria.clearance_time_s, 2.15)
         self.assertEqual(profile.transfer_damping_criteria.pre_fault_start_time_s, 1.9)
+        self.assertAlmostEqual(profile.transfer_damping_criteria.analysis_start_time_s, 3.03)
 
 
 if __name__ == "__main__":

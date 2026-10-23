@@ -56,7 +56,7 @@ class TransferDampingPlotTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
             pre_fault_power=100.0,
             final_power=90.0,
-            status="warning_growing_mode",
+            status="growing_mode",
             dominant_frequency_hz=1.0,
             warning="The selected dominant-mode envelope grows.",
             damping_pairs=(pair,),
