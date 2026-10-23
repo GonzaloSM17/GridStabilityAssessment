@@ -1,96 +1,98 @@
-"""Unit tests for active-power transfer damping assessment."""
+"""Tests for electromechanical-mode transfer damping assessment."""
 
 from math import exp, pi, sqrt
 import unittest
 
-from transfer_analysis import DampingCriteria, assess_transfer_damping
+from transfer_analysis import assess_transfer_damping
 
 
 class TransferDampingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.time = [index / 1000 for index in range(5001)]
 
-    def damped_power(self, *, starts_negative: bool = False):
-        damping_ratio = 0.10
-        frequency_hz = 2.0
-        decay = 2.0 * pi * frequency_hz * damping_ratio / sqrt(1.0 - damping_ratio**2)
+    def power_with_mode(
+        self,
+        *,
+        mode_frequency_hz: float = 1.0,
+        damping_ratio: float = 0.10,
+        starts_negative: bool = False,
+        high_frequency_ripple: bool = False,
+    ) -> list[float]:
+        decay = (
+            2.0
+            * pi
+            * mode_frequency_hz
+            * damping_ratio
+            / sqrt(1.0 - damping_ratio**2)
+        )
         polarity = -1.0 if starts_negative else 1.0
         values = []
         for time in self.time:
             if time < 1.0:
                 values.append(100.0)
-            else:
-                values.append(
-                    90.0
-                    + polarity
-                    * 20.0
-                    * exp(-decay * (time - 1.12))
-                    * __import__("math").cos(2.0 * pi * frequency_hz * (time - 1.12))
-                )
+                continue
+            mode = (
+                polarity
+                * 20.0
+                * exp(-decay * (time - 1.12))
+                * __import__("math").cos(2.0 * pi * mode_frequency_hz * (time - 1.12))
+            )
+            ripple = (
+                5.0 * __import__("math").cos(2.0 * pi * 12.0 * (time - 1.12))
+                if high_frequency_ripple
+                else 0.0
+            )
+            values.append(90.0 + mode + ripple)
         return values
 
-    def test_records_all_reliable_pairs_and_the_lowest_damping(self):
+    def test_identifies_the_dominant_electromechanical_mode(self):
         result = assess_transfer_damping(
             self.time,
-            self.damped_power(),
+            self.power_with_mode(high_frequency_ripple=True),
             run_id=1,
             transfer_name="NC_TEST_C1",
         )
 
         self.assertEqual(result.status, "pass")
-        self.assertGreaterEqual(len(result.damping_pairs), 2)
-        self.assertAlmostEqual(result.damping_ratio, 0.10, places=2)
-        self.assertEqual(
-            result.damping_ratio,
-            min(pair.damping_ratio for pair in result.damping_pairs),
-        )
+        self.assertAlmostEqual(result.dominant_frequency_hz, 1.0, delta=0.3)
+        self.assertIsNotNone(result.selected_damping_pair)
+        self.assertAlmostEqual(result.damping_ratio, 0.10, delta=0.03)
+        self.assertGreaterEqual(result.selected_damping_pair.period_s, 0.5)
 
-    def test_negative_initial_excursion_uses_negative_minima(self):
+    def test_negative_initial_excursion_uses_same_sign_valleys(self):
         result = assess_transfer_damping(
             self.time,
-            self.damped_power(starts_negative=True),
+            self.power_with_mode(starts_negative=True),
             run_id=1,
             transfer_name="NC_TEST_C1",
         )
 
         self.assertEqual(result.status, "pass")
-        self.assertTrue(any(pair.polarity == "negative" for pair in result.damping_pairs))
+        self.assertEqual(result.selected_damping_pair.polarity, "negative")
 
-    def test_excludes_the_early_transient_from_the_damping_estimate(self):
+    def test_fast_ripple_is_not_an_electromechanical_mode(self):
         values = []
         for time in self.time:
-            if time < 1.0:
-                values.append(100.0)
-            elif time < 2.0:
-                values.append(
-                    90.0
-                    + 20.0
-                    * exp(2.0 * (time - 1.12))
-                    * __import__("math").cos(8.0 * pi * (time - 1.12))
-                )
-            else:
-                values.append(
-                    90.0
-                    + 20.0
-                    * exp(-1.0 * (time - 2.0))
-                    * __import__("math").cos(4.0 * pi * (time - 2.0))
-                )
+            values.append(
+                100.0
+                if time < 1.0
+                else 90.0 + 20.0 * __import__("math").cos(2.0 * pi * 12.0 * (time - 1.12))
+            )
 
-        after_transient = assess_transfer_damping(
-            self.time, values, run_id=1, transfer_name="NC_TEST_C1"
-        )
-        including_transient = assess_transfer_damping(
+        result = assess_transfer_damping(
             self.time,
             values,
             run_id=1,
             transfer_name="NC_TEST_C1",
-            criteria=DampingCriteria(analysis_start_time_s=1.12),
         )
 
-        self.assertGreater(after_transient.damping_ratio, 0.0)
-        self.assertLess(including_transient.damping_ratio, 0.0)
+        self.assertIsNone(result.damping_ratio)
+        self.assertIn(
+            result.status,
+            {"no_identifiable_electromechanical_mode", "insufficient_mode_cycles"},
+        )
 
-    def test_opened_transfer_is_not_a_damping_failure(self):
+    def test_opened_transfer_is_not_a_damping_warning(self):
         values = [100.0 if time < 1.0 else 0.0 for time in self.time]
         result = assess_transfer_damping(
             self.time,

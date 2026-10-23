@@ -51,7 +51,7 @@ class AnalysisReport:
                 "Selected Buses",
                 "Failed or Not Evaluated Criteria",
                 "Transfer Damping Status",
-                "Transfer Damping Failures",
+                "Transfer Damping Warnings",
             )
         )
         selected_buses = ", ".join(
@@ -76,8 +76,9 @@ class AnalysisReport:
     def _write_transfer_summary(self, sheet) -> None:
         sheet.append(
             (
-                "Transfer", "Evaluated Runs", "Opened Runs", "No Oscillation Runs",
-                "Minimum Damping [%]", "P05 Damping [%]", "Failing Runs",
+                "Transfer", "Mode Evaluations", "Opened Runs", "No Identifiable Mode Runs",
+                "Insufficient Cycles Runs", "Minimum Selected Damping [%]",
+                "P05 Damping [%]", "Warning Runs",
             )
         )
         import numpy as np
@@ -85,16 +86,20 @@ class AnalysisReport:
         for transfer_name in self.transfer_analysis.transfer_names:
             assessments = self.transfer_analysis.assessments_for_transfer(transfer_name)
             damping = [item.damping_ratio for item in assessments if item.damping_ratio is not None]
-            failures = [item for item in assessments if item.status == "below_damping_limit"]
+            warnings = [item for item in assessments if item.warning]
             sheet.append(
                 (
                     transfer_name,
                     len(damping),
                     sum(item.status == "opened" for item in assessments),
-                    sum(item.status == "no_identifiable_oscillation" for item in assessments),
+                    sum(
+                        item.status == "no_identifiable_electromechanical_mode"
+                        for item in assessments
+                    ),
+                    sum(item.status == "insufficient_mode_cycles" for item in assessments),
                     min(damping) * 100 if damping else None,
                     float(np.quantile(damping, 0.05)) * 100 if damping else None,
-                    ", ".join(self._run_name(item.run_id) for item in failures) or "-",
+                    ", ".join(self._run_name(item.run_id) for item in warnings) or "-",
                 )
             )
         self._format_transfer_sheet(sheet)
@@ -102,17 +107,18 @@ class AnalysisReport:
     def _write_transfer_damping(self, sheet) -> None:
         sheet.append(
             (
-                "Run", "Transfer", "Pre-fault P", "Final P", "Status", "Damping [%]",
-                "Worst Polarity", "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]",
-                "A1", "A2",
+                "Run", "Transfer", "Pre-fault P", "Final P", "Status", "Warning",
+                "Dominant Frequency [Hz]", "Damping [%]", "Selected Polarity",
+                "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]", "A1", "A2",
             )
         )
         for item in self.transfer_analysis.assessments:
-            pair = item.worst_damping_pair
+            pair = item.selected_damping_pair
             sheet.append(
                 (
                     self._run_name(item.run_id), item.transfer_name, item.pre_fault_power,
-                    item.final_power, item.status, item.damping_ratio * 100 if item.damping_ratio is not None else None,
+                    item.final_power, item.status, item.warning, item.dominant_frequency_hz,
+                    item.damping_ratio * 100 if item.damping_ratio is not None else None,
                     pair.polarity if pair else None, pair.first_time_s if pair else None,
                     pair.second_time_s if pair else None, pair.period_s if pair else None,
                     pair.first_amplitude if pair else None, pair.second_amplitude if pair else None,
@@ -131,8 +137,16 @@ class AnalysisReport:
         if self.transfer_analysis is None:
             return "Not evaluated"
         assessments = [item for item in self.transfer_analysis.assessments if item.run_id == run_id]
-        if any(item.status == "below_damping_limit" for item in assessments):
-            return "Below damping limit"
+        if any(item.status == "warning_growing_mode" for item in assessments):
+            return "Warning: growing mode"
+        if any(item.status == "warning_below_damping_limit" for item in assessments):
+            return "Warning: damping below limit"
+        if any(item.status == "insufficient_mode_cycles" for item in assessments):
+            return "Warning: insufficient mode cycles"
+        if any(item.status == "no_identifiable_electromechanical_mode" for item in assessments):
+            return "Warning: no identifiable mode"
+        if any(item.warning for item in assessments):
+            return "Pass with warning"
         if any(item.status == "pass" for item in assessments):
             return "Pass"
         return "Not evaluated"
@@ -141,9 +155,9 @@ class AnalysisReport:
         if self.transfer_analysis is None:
             return ()
         return tuple(
-            f"{item.transfer_name} = {item.damping_ratio * 100:.2f}% (< {item.criteria.minimum_damping_ratio * 100:.2f}%)"
+            f"{item.transfer_name}: {item.warning}"
             for item in self.transfer_analysis.assessments
-            if item.run_id == run_id and item.status == "below_damping_limit"
+            if item.run_id == run_id and item.warning
         )
 
     def _write_initialization(self, sheet) -> None:
@@ -283,7 +297,17 @@ class AnalysisReport:
             transfer_criteria = self.transfer_analysis.assessments[0].criteria
             rows.extend(
                 (
-                    ("Transfer damping", "Evaluation start [s]", transfer_criteria.analysis_start_time_s),
+                    (
+                        "Transfer damping",
+                        "Electromechanical mode band [Hz]",
+                        f"{transfer_criteria.mode_minimum_frequency_hz:.1f} to "
+                        f"{transfer_criteria.mode_maximum_frequency_hz:.1f}",
+                    ),
+                    (
+                        "Transfer damping",
+                        "Post-clearance guard time [s]",
+                        transfer_criteria.post_clearance_guard_time_s,
+                    ),
                     ("Transfer damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
                 )
             )

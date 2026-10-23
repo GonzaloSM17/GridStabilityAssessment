@@ -45,10 +45,10 @@ class TransferDampingPlotTests(unittest.TestCase):
         pair = DampingPair(
             polarity="positive",
             first_time_s=1.2,
-            second_time_s=1.4,
+            second_time_s=2.2,
             first_amplitude=3.0,
             second_amplitude=4.0,
-            period_s=0.2,
+            period_s=1.0,
             damping_ratio=-0.037,
         )
         assessment = TransferRunAssessment(
@@ -56,9 +56,11 @@ class TransferDampingPlotTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
             pre_fault_power=100.0,
             final_power=90.0,
-            status="below_damping_limit",
+            status="warning_growing_mode",
+            dominant_frequency_hz=1.0,
+            warning="The selected dominant-mode envelope grows.",
             damping_pairs=(pair,),
-            worst_damping_pair=pair,
+            selected_damping_pair=pair,
             criteria=DampingCriteria(),
         )
         figure = object.__new__(AnalysisPipeline).plot_transfer_damping_summary(
