@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from data.run import MonteCarloRun
-from single_run.angular_stability import AngularCalculation, angular_excursion_limit
+from stability.angular import AngularCalculation, angular_excursion_limit
 from stability.scenario import ContingencyScenario
 
 

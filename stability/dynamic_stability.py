@@ -11,6 +11,7 @@ class DynamicStabilityAssessment:
     status: str
     voltage_status: str
     modal_damping_status: str
+    angular_status: str | None = None
     reason: str | None = None
 
 
@@ -18,8 +19,14 @@ def assess_dynamic_stability(
     run_id: int,
     voltage_status: str,
     modal_damping_status: str,
+    angular_status: str | None = None,
 ) -> DynamicStabilityAssessment:
-    """Apply the active voltage and modal-damping decision to one run."""
+    """Apply active voltage/damping criteria and an optional angular criterion.
+
+    Monte Carlo currently omits ``angular_status`` and therefore preserves its
+    existing voltage-plus-damping decision. A focused single-run assessment can
+    provide it to add the strict centre-of-inertia angular result.
+    """
     if voltage_status == "Not evaluated":
         status = "Not evaluated"
         reason = "Voltage stability was not evaluated."
@@ -32,6 +39,12 @@ def assess_dynamic_stability(
     elif modal_damping_status != "Damped":
         status = "Unstable"
         reason = "Active-power transfer modal damping criteria failed."
+    elif angular_status == "Not evaluated":
+        status = "Not evaluated"
+        reason = "Angular stability was not evaluated."
+    elif angular_status not in {None, "Stable"}:
+        status = "Unstable"
+        reason = "Angular stability criterion failed."
     else:
         status = "Stable"
         reason = None
@@ -40,5 +53,6 @@ def assess_dynamic_stability(
         status=status,
         voltage_status=voltage_status,
         modal_damping_status=modal_damping_status,
+        angular_status=angular_status,
         reason=reason,
     )

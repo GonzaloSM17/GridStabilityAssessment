@@ -24,17 +24,28 @@ if __name__ == "__main__":
 
     workbench = SingleRunWorkbench(run_path, scenario, assets_path)
     general_result = workbench.create_general_overview()
+    initialization_result = workbench.create_initialization()
     voltage_result = workbench.create_voltage_stability()
     damping_result = workbench.create_damping_stability()
+    high_frequency_result = workbench.create_high_frequency()
     angular_result = workbench.create_angular_stability()
-    results = (general_result, voltage_result, damping_result, angular_result)
+    results = (
+        general_result,
+        initialization_result,
+        voltage_result,
+        damping_result,
+        high_frequency_result,
+        angular_result,
+    )
     for result in results:
         print(
             f"Created {len(result.figure_paths)} figures in {result.output_directory}"
         )
     report_path = workbench.create_report(
+        initialization_result.analysis,
         voltage_result.analysis,
         damping_result.analysis,
+        high_frequency_result.analysis,
         angular_result.analysis,
     )
     print(f"Created report at {report_path}")

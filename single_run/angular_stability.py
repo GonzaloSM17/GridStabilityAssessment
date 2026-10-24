@@ -1,66 +1,25 @@
-"""Centre-of-inertia angular-excursion assessment for one simulation run."""
+"""Single-run presentation adapter for shared angular-stability calculations."""
 
 from dataclasses import dataclass
-from math import ceil
 from pathlib import Path
 import re
 
 from data.assets import Assets
 from data.run import MonteCarloRun
+from stability.angular import (
+    ANGULAR_LIMIT_DEGREES,
+    ANGULAR_REFERENCE_NOTE,
+    AngularCalculation,
+    AngularMachineInput,
+    AngularStabilityAnalysis,
+    angular_excursion_limit,
+    assess_angular_stability,
+)
 from stability.scenario import ContingencyScenario
 
 
 ROTOR_ANGLE_PATTERN = re.compile(r"^(?:HE|HP|GEO|TER)_[^/]+/Teta_1_")
-ANGULAR_LIMIT_DEGREES = 120.0
-ANGULAR_DISCLAIMER = (
-    "Angular excursions are referred to the centre of inertia calculated at every "
-    "time step with the H·S weight from Assets. The ±120° lines are the active "
-    "angular-separation reference limits."
-)
-
-
-def angular_excursion_limit(excursions) -> float:
-    """Return a symmetric angular axis of at least ±130°, extended in 10° steps."""
-    maximum_excursion = max(
-        (abs(value) for excursion in excursions for value in excursion),
-        default=0.0,
-    )
-    return float(max(130, ceil(maximum_excursion / 10.0) * 10))
-
-
-@dataclass(frozen=True)
-class AngularMachineAssessment:
-    """One machine's H·S weight and centre-of-inertia angular excursion."""
-
-    machine_name: str
-    signal_name: str
-    inertia_s: float
-    nominal_power_mva: float
-    inertia_weight_mva_s: float
-    minimum_excursion_degrees: float
-    maximum_excursion_degrees: float
-    maximum_absolute_excursion_degrees: float
-    first_limit_violation_time_s: float | None
-
-    @property
-    def is_within_limit(self) -> bool:
-        """Return whether the full excursion remains strictly inside ±120 degrees."""
-        return self.first_limit_violation_time_s is None
-
-
-@dataclass(frozen=True)
-class AngularStabilityAnalysis:
-    """Machine excursions relative to the H·S weighted centre-of-inertia angle."""
-
-    machines: tuple[AngularMachineAssessment, ...]
-    centre_of_inertia_minimum_degrees: float
-    centre_of_inertia_maximum_degrees: float
-    disclaimer: str = ANGULAR_DISCLAIMER
-
-    @property
-    def is_stable(self) -> bool:
-        """Return whether every published synchronous machine remains inside ±120°."""
-        return all(machine.is_within_limit for machine in self.machines)
+ANGULAR_DISCLAIMER = ANGULAR_REFERENCE_NOTE
 
 
 @dataclass(frozen=True)
@@ -72,25 +31,10 @@ class AngularStabilityResult:
     figure_paths: tuple[Path, ...]
 
 
-@dataclass(frozen=True)
-class AngularCalculation:
-    """Full sample-by-sample COI calculation reused by single-run artefacts."""
-
-    analysis: AngularStabilityAnalysis
-    time_values: tuple[float, ...]
-    centre_of_inertia: tuple[float, ...]
-    excursions: tuple[tuple[float, ...], ...]
-
-
 class SingleRunAngularStability:
-    """Calculate H·S weighted angular excursions for every published machine angle."""
+    """Read one run and render the shared H·S weighted angular calculation."""
 
-    def __init__(
-        self,
-        run: MonteCarloRun,
-        scenario: ContingencyScenario,
-        assets: Assets,
-    ) -> None:
+    def __init__(self, run: MonteCarloRun, scenario: ContingencyScenario, assets: Assets) -> None:
         if run.dataset is None:
             raise ValueError(f"Run {run.run_id} does not contain a Parquet result.")
         self.run = run
@@ -98,15 +42,42 @@ class SingleRunAngularStability:
         self.assets = assets
 
     def analyze(self) -> AngularStabilityAnalysis:
-        """Calculate the centre of inertia and each machine excursion at every sample."""
         return self.calculate().analysis
 
     def calculate(self) -> AngularCalculation:
-        """Return the sample-by-sample COI and machine-excursion calculation."""
-        return self._calculate()
+        """Adapt published signals and Assets properties to the shared calculator."""
+        self.run.dataset.inspect()
+        signal_names = tuple(
+            series.name for series in self.run.dataset.series if ROTOR_ANGLE_PATTERN.search(series.name)
+        )
+        if not signal_names:
+            raise ValueError("No synchronous-machine rotor-angle signals were found.")
+        data = self.run.dataset.read_series_group(signal_names)
+        machines = []
+        angle_values = {}
+        missing_assets = []
+        for signal_name in signal_names:
+            machine_name = signal_name.split("/", 1)[0]
+            try:
+                inertia_s = self.assets.get_inertia_s(machine_name)
+                nominal_power_mva = self.assets.get_nominal_power_mva(machine_name)
+            except (KeyError, ValueError):
+                missing_assets.append(machine_name)
+                continue
+            machines.append(
+                AngularMachineInput(machine_name, signal_name, inertia_s, nominal_power_mva)
+            )
+            angle_values[machine_name] = data[signal_name].to_list()
+        if missing_assets:
+            names = ", ".join(sorted(set(missing_assets)))
+            raise KeyError(
+                "A centre-of-inertia angle requires H and S for every published "
+                f"machine angle. Missing or invalid Assets entries: {names}"
+            )
+        return assess_angular_stability(data["time"].to_list(), angle_values, machines)
 
     def create(self, output_directory: str | Path) -> AngularStabilityResult:
-        """Save the centre-of-inertia and individual angular-excursion figure."""
+        """Save separate COI, machine-excursion and combined figures."""
         import matplotlib.pyplot as plt
 
         output_path = Path(output_directory)
@@ -128,80 +99,6 @@ class SingleRunAngularStability:
             obsolete_path.unlink()
         return AngularStabilityResult(output_path, calculation.analysis, tuple(paths))
 
-    def _calculate(self):
-        import numpy as np
-
-        self.run.dataset.inspect()
-        signal_names = tuple(
-            series.name
-            for series in self.run.dataset.series
-            if ROTOR_ANGLE_PATTERN.search(series.name)
-        )
-        if not signal_names:
-            raise ValueError("No synchronous-machine rotor-angle signals were found.")
-        machine_names = tuple(signal_name.split("/", 1)[0] for signal_name in signal_names)
-        missing_assets = []
-        weights = []
-        inertias = []
-        powers = []
-        for machine_name in machine_names:
-            try:
-                inertia_s = self.assets.get_inertia_s(machine_name)
-                nominal_power_mva = self.assets.get_nominal_power_mva(machine_name)
-            except (KeyError, ValueError):
-                missing_assets.append(machine_name)
-                continue
-            inertias.append(inertia_s)
-            powers.append(nominal_power_mva)
-            weights.append(inertia_s * nominal_power_mva)
-        if missing_assets:
-            names = ", ".join(sorted(set(missing_assets)))
-            raise KeyError(
-                "A centre-of-inertia angle requires H and S for every published "
-                f"machine angle. Missing or invalid Assets entries: {names}"
-            )
-        data = self.run.dataset.read_series_group(signal_names)
-        time_values = np.asarray(data["time"].to_list(), dtype=float)
-        angles = np.asarray([data[name].to_list() for name in signal_names], dtype=float)
-        weight_values = np.asarray(weights, dtype=float)
-        centre_of_inertia = np.average(angles, axis=0, weights=weight_values)
-        excursions = angles - centre_of_inertia
-        machines = tuple(
-            AngularMachineAssessment(
-                machine_name=machine_name,
-                signal_name=signal_name,
-                inertia_s=inertia_s,
-                nominal_power_mva=nominal_power_mva,
-                inertia_weight_mva_s=weight,
-                minimum_excursion_degrees=float(np.min(excursion)),
-                maximum_excursion_degrees=float(np.max(excursion)),
-                maximum_absolute_excursion_degrees=float(np.max(np.abs(excursion))),
-                first_limit_violation_time_s=self._first_limit_violation_time(
-                    time_values,
-                    excursion,
-                ),
-            )
-            for machine_name, signal_name, inertia_s, nominal_power_mva, weight, excursion in zip(
-                machine_names,
-                signal_names,
-                inertias,
-                powers,
-                weights,
-                excursions,
-            )
-        )
-        analysis = AngularStabilityAnalysis(
-            machines=machines,
-            centre_of_inertia_minimum_degrees=float(np.min(centre_of_inertia)),
-            centre_of_inertia_maximum_degrees=float(np.max(centre_of_inertia)),
-        )
-        return AngularCalculation(
-            analysis,
-            tuple(time_values.tolist()),
-            tuple(centre_of_inertia.tolist()),
-            tuple(tuple(excursion.tolist()) for excursion in excursions),
-        )
-
     def _plot_centre_of_inertia(self, calculation: AngularCalculation):
         import matplotlib.pyplot as plt
 
@@ -221,7 +118,7 @@ class SingleRunAngularStability:
         self._draw_machine_excursions(axis, calculation)
         axis.set_title("Machine Angular Excursions Relative to the Centre of Inertia", fontsize=12, fontweight="normal", pad=7)
         figure.suptitle("Angular Stability — " + ("Stable" if calculation.analysis.is_stable else "Unstable"), fontsize=13, fontweight="normal", y=0.975)
-        figure.text(0.5, 0.015, calculation.analysis.disclaimer, ha="center", va="bottom", fontsize=9, color="#404040")
+        figure.text(0.5, 0.015, ANGULAR_DISCLAIMER, ha="center", va="bottom", fontsize=9, color="#404040")
         figure.subplots_adjust(left=0.085, right=0.95, bottom=0.12, top=0.89)
         return figure
 
@@ -237,16 +134,16 @@ class SingleRunAngularStability:
         self._draw_machine_excursions(bottom_axis, calculation)
         bottom_axis.set_title("Machine Angular Excursions Relative to the Centre of Inertia", fontsize=11, fontweight="normal", pad=6)
         figure.suptitle("Angular Stability — " + ("Stable" if calculation.analysis.is_stable else "Unstable"), fontsize=13, fontweight="normal", y=0.975)
-        figure.text(0.5, 0.015, calculation.analysis.disclaimer, ha="center", va="bottom", fontsize=9, color="#404040")
+        figure.text(0.5, 0.015, ANGULAR_DISCLAIMER, ha="center", va="bottom", fontsize=9, color="#404040")
         figure.subplots_adjust(left=0.085, right=0.95, bottom=0.09, top=0.91, hspace=0.30)
         return figure
 
     def _draw_machine_excursions(self, axis, calculation: AngularCalculation) -> None:
         import matplotlib.pyplot as plt
 
-        colours = plt.get_cmap("tab20")
+        colors = plt.get_cmap("tab20")
         for index, excursion in enumerate(calculation.excursions):
-            axis.plot(calculation.time_values, excursion, color=colours(index % colours.N), linewidth=0.75, alpha=0.72)
+            axis.plot(calculation.time_values, excursion, color=colors(index % colors.N), linewidth=0.75, alpha=0.72)
         axis.axhline(ANGULAR_LIMIT_DEGREES, color="#D73027", linestyle="--", linewidth=1.0)
         axis.axhline(-ANGULAR_LIMIT_DEGREES, color="#D73027", linestyle="--", linewidth=1.0)
         axis.axhline(0.0, color="#5E6472", linewidth=0.75)
@@ -261,19 +158,3 @@ class SingleRunAngularStability:
         axis.grid(visible=True, color="#D6D9DC", linewidth=0.55, alpha=0.8)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
-
-    @staticmethod
-    def _first_limit_violation_time(time_values, excursion) -> float | None:
-        """Return the first instant at which the strict ±120° criterion is violated."""
-        import numpy as np
-
-        violation_indices = np.flatnonzero(
-            (excursion >= ANGULAR_LIMIT_DEGREES)
-            | (excursion <= -ANGULAR_LIMIT_DEGREES)
-        )
-        return (
-            float(time_values[violation_indices[0]])
-            if len(violation_indices)
-            else None
-        )
-

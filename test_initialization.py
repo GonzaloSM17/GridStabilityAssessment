@@ -3,7 +3,7 @@
 import math
 import unittest
 
-from stability.voltage import assess_initialization
+from stability.initialization import assess_initialization
 
 
 class InitializationTests(unittest.TestCase):

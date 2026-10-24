@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 
-from stability.voltage import FrequencyCriteria, InitializationCriteria, StabilityCriteria
+from stability.initialization import InitializationCriteria
+from stability.voltage import FrequencyCriteria, StabilityCriteria
 from stability.power_transfer import DampingCriteria, HighFrequencyCriteria
 
 

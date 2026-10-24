@@ -4,12 +4,14 @@ from dataclasses import dataclass
 from math import sqrt
 from math import ceil, floor, log10
 from stability.voltage import (
-    InitializationAssessment,
-    InitializationCriteria,
     StabilityAssessment,
     StabilityCriteria,
-    assess_initialization,
     assess_stability,
+)
+from stability.initialization import (
+    InitializationAssessment,
+    InitializationCriteria,
+    assess_initialization,
 )
 from data.signals import Measurement, VOLTAGE_RMS
 from stability.scenario import (
@@ -82,7 +84,7 @@ def _severity_color_map():
 
 
 def _response_area_scale(area_by_run_id: dict[int, float]) -> tuple[float, float, float]:
-    """Return rounded response-area limits and a legible study-wide tick step."""
+    """Return rounded response-area bounds and a legible tick step."""
     areas = tuple(area_by_run_id.values())
     if not areas:
         return 0.0, 1.0, 0.2
@@ -108,8 +110,29 @@ def _response_area_normalization(area_by_run_id: dict[int, float]):
 
 
 def _response_area_color_scale(area_by_run_id: dict[int, float]):
-    """Return a continuous severity scale across rounded observed limits."""
-    return _response_area_normalization(area_by_run_id), _severity_color_map()
+    """Return rounded display limits with saturated observed severity extremes."""
+    from matplotlib.colors import LinearSegmentedColormap
+
+    normalization = _response_area_normalization(area_by_run_id)
+    areas = tuple(area_by_run_id.values())
+    if not areas or min(areas) == max(areas):
+        return normalization, _severity_color_map()
+    # Keep rounded limits and ticks, while assigning full green/red to the
+    # actual best/worst response inside those limits.
+    minimum_position = normalization(min(areas))
+    maximum_position = normalization(max(areas))
+    midpoint = (minimum_position + maximum_position) / 2.0
+    color_map = LinearSegmentedColormap.from_list(
+        "voltage_response_severity",
+        (
+            (0.0, "#009E73"),
+            (minimum_position, "#009E73"),
+            (midpoint, "#F0B323"),
+            (maximum_position, "#D73027"),
+            (1.0, "#D73027"),
+        ),
+    )
+    return normalization, color_map
 
 
 def _response_area_colorbar_ticks(area_by_run_id: dict[int, float]) -> tuple[float, ...]:

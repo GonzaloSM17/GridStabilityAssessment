@@ -12,16 +12,27 @@ from single_run.angular_stability import (
 from single_run.damping_stability import (
     DampingStabilityResult,
     SingleRunDampingStability,
+    TransferDampingAnalysis,
 )
 from single_run.general_overview import GeneralOverview, GeneralOverviewResult
+from single_run.initialization import (
+    InitializationAnalysis,
+    InitializationResult,
+    SingleRunInitialization,
+)
+from single_run.high_frequency import (
+    HighFrequencyAnalysis,
+    HighFrequencyResult,
+    SingleRunHighFrequency,
+)
 from single_run.reports import SingleRunReport
 from single_run.voltage_stability import (
     SingleRunVoltageStability,
     VoltageStabilityAnalysis,
     VoltageStabilityResult,
 )
-from single_run.damping_stability import TransferDampingAnalysis
-from single_run.angular_stability import AngularStabilityAnalysis
+from stability.angular import AngularStabilityAnalysis
+from stability.dynamic_stability import assess_dynamic_stability
 from stability.scenario import (
     ContingencyScenario,
     DEFAULT_CONTINGENCY_SCENARIO,
@@ -69,6 +80,14 @@ class SingleRunWorkbench:
             angular_calculation,
         ).create(output_directory)
 
+    def create_initialization(self) -> InitializationResult:
+        """Assess and plot 220/500 kV RMS-voltage initialization under ``01_Initialization``."""
+        output_directory = self.analysis_output_directory() / "01_Initialization"
+        return SingleRunInitialization(
+            self.run,
+            self.profile.initialization_criteria,
+        ).create(output_directory)
+
     def create_voltage_stability(self) -> VoltageStabilityResult:
         """Assess all 220/500 kV voltages under ``02_Voltage_Stability``."""
         output_directory = self.analysis_output_directory() / "02_Voltage_Stability"
@@ -82,6 +101,11 @@ class SingleRunWorkbench:
         return SingleRunDampingStability(self.run, self.profile).create(
             output_directory
         )
+
+    def create_high_frequency(self) -> HighFrequencyResult:
+        """Observe high-frequency transfer components under ``03_Damping_Stability``."""
+        output_directory = self.analysis_output_directory() / "03_Damping_Stability"
+        return SingleRunHighFrequency(self.run, self.profile).create(output_directory)
 
     def create_angular_stability(self) -> AngularStabilityResult:
         """Create the H·S weighted angular assessment under ``04_Angular_Stability``."""
@@ -97,18 +121,49 @@ class SingleRunWorkbench:
 
     def create_report(
         self,
+        initialization: InitializationAnalysis,
         voltage: VoltageStabilityAnalysis,
         damping: TransferDampingAnalysis,
+        high_frequency: HighFrequencyAnalysis,
         angular: AngularStabilityAnalysis,
     ) -> Path:
         """Write the database-style case report at the analysis-output root."""
         return SingleRunReport(
             self.run,
             self.profile,
+            initialization,
             voltage,
             damping,
+            high_frequency,
             angular,
+            assess_dynamic_stability(
+                self.run.run_id,
+                self._voltage_status(voltage),
+                self._damping_status(damping),
+                "Stable" if angular.is_stable else "Unstable",
+            ),
         ).write(self.analysis_output_directory())
+
+    @staticmethod
+    def _voltage_status(voltage: VoltageStabilityAnalysis) -> str:
+        return "Stable" if all(item.assessment.is_stable for item in voltage.assessments) else "Unstable"
+
+    @staticmethod
+    def _damping_status(damping: TransferDampingAnalysis) -> str:
+        assessments = [
+            record.assessment
+            for record in damping.records
+            if record.assessment.status not in {"opened", "inactive_pre_fault"}
+        ]
+        if not assessments:
+            return "Not applicable"
+        if any(item.status == "growing" for item in assessments):
+            return "Growing"
+        if any(item.status == "damped_under" for item in assessments):
+            return "Damped under"
+        if any(item.damping_ratio is not None for item in assessments):
+            return "Damped"
+        return "Not measurable"
 
     @staticmethod
     def _choose_run_path() -> Path:

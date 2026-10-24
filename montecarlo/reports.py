@@ -553,7 +553,7 @@ class AnalysisReport:
         if not voltage_analysis.run_results:
             if self.profile is not None:
                 return self.profile.initialization_criteria
-            from stability.voltage import InitializationCriteria
+            from stability.initialization import InitializationCriteria
 
             return InitializationCriteria()
         return voltage_analysis.run_results[0].initialization.criteria
