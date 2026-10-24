@@ -13,7 +13,7 @@ class TransferDampingRunSummary:
     """One run's consolidated active-transfer damping conclusion."""
 
     status: str
-    findings: tuple[str, ...]
+    lowest_damping_percent: float | None
 
 
 @dataclass(frozen=True)
@@ -35,24 +35,24 @@ class AnalysisReport:
         summary_sheet.title = "Summary"
         initialization_sheet = workbook.create_sheet("Initialization")
         stability_sheet = workbook.create_sheet("Stability")
-        criteria_sheet = workbook.create_sheet("Criteria")
+        definitions_sheet = workbook.create_sheet("Definitions")
         if self.scenario is not None:
             scenario_sheet = workbook.create_sheet("Scenario")
         if self.transfer_analysis is not None:
-            transfer_summary_sheet = workbook.create_sheet("Transfer Summary")
-            transfer_damping_sheet = workbook.create_sheet("Transfer Damping")
-            damping_pairs_sheet = workbook.create_sheet("Candidate Damping Pairs")
+            transfer_assessments_sheet = workbook.create_sheet("Transfer Assessments")
+            transfer_modes_sheet = workbook.create_sheet("Transfer Modes")
+            damping_pairs_sheet = workbook.create_sheet("Transfer Damping Pairs")
 
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
         self._write_stability(stability_sheet)
-        self._write_criteria(criteria_sheet)
+        self._write_definitions(definitions_sheet)
         if self.scenario is not None:
             self._write_scenario(scenario_sheet)
         if self.transfer_analysis is not None:
-            self._write_transfer_summary(transfer_summary_sheet)
-            self._write_transfer_damping(transfer_damping_sheet)
-            self._write_damping_pairs(damping_pairs_sheet)
+            self._write_transfer_assessments(transfer_assessments_sheet)
+            self._write_transfer_modes(transfer_modes_sheet)
+            self._write_transfer_damping_pairs(damping_pairs_sheet)
         workbook.save(output_path)
         workbook.close()
         return output_path
@@ -74,187 +74,100 @@ class AnalysisReport:
         self._format_sheet(sheet)
 
     def _write_summary(self, sheet) -> None:
-        """Write separate voltage and transfer-damping conclusions per run."""
-        sheet.append(
-            (
-                "Run",
-                "Overall Assessment",
-                "Voltage Stability",
-                "Selected Buses",
-                "Voltage Findings",
-                "Transfer Damping",
-                "Transfer Damping Findings",
-            )
-        )
-        selected_buses = ", ".join(
-            bus_analysis.bus_name
-            for bus_analysis in self.study_analysis.bus_analyses
-        )
+        """Write a compact run index; detailed records live in the data sheets."""
+        sheet.append(("Run", "Voltage Stability", "Transfer Damping", "Lowest Transfer Damping [%]"))
         for run_id in self.study_analysis.run_ids:
-            voltage_status = self.study_analysis.status_for_run(run_id)
-            voltage_findings = self.study_analysis.reasons_for_run(run_id)
             damping = self._transfer_damping_summary_for_run(run_id)
-            sheet.append(
-                (
-                    self._run_name(run_id),
-                    self._overall_assessment(voltage_status, damping.status),
-                    voltage_status,
-                    selected_buses,
-                    "; ".join(voltage_findings) or "-",
-                    damping.status,
-                    "; ".join(damping.findings) or "-",
-                )
-            )
-
+            sheet.append((
+                self._run_name(run_id),
+                self.study_analysis.status_for_run(run_id),
+                damping.status,
+                damping.lowest_damping_percent,
+            ))
         self._format_sheet(sheet)
 
-    def _write_transfer_summary(self, sheet) -> None:
-        sheet.append(
-            (
-                "Transfer", "Compliant Runs", "Under-damped Runs", "Growing-mode Runs", "Not Evaluated Runs",
-                "Minimum Selected Damping [%]", "P05 Damping [%]",
-            )
-        )
-        import numpy as np
-
-        for transfer_name in self.transfer_analysis.transfer_names:
-            assessments = self.transfer_analysis.assessments_for_transfer(transfer_name)
-            active_assessments = [
-                item
-                for item in assessments
-                if item.status not in {"opened", "inactive_pre_fault"}
-            ]
-            if not active_assessments:
-                continue
-            damping = [
-                item.damping_ratio
-                for item in active_assessments
-                if item.damping_ratio is not None
-            ]
-            compliant = [item for item in active_assessments if item.status == "compliant"]
-            under_damped = [item for item in active_assessments if item.status == "under_damped"]
-            growing_mode = [item for item in active_assessments if item.status == "growing_mode"]
-            not_evaluable = [
-                item for item in active_assessments if item.status == "not_evaluated"
-            ]
-            sheet.append(
-                (
-                    transfer_name,
-                    len(compliant),
-                    len(under_damped),
-                    len(growing_mode),
-                    len(not_evaluable),
-                    min(damping) * 100 if damping else None,
-                    float(np.quantile(damping, 0.05)) * 100 if damping else None,
-                )
-            )
+    def _write_transfer_assessments(self, sheet) -> None:
+        """Write one database-style assessment row per run and transfer."""
+        sheet.append((
+            "Run", "Transfer", "Pre-fault P", "Final P", "Assessment",
+            "Limiting Candidate [Hz]", "Limiting Damping [%]", "Note",
+        ))
+        for item in self.transfer_analysis.assessments:
+            mode = item.critical_mode
+            sheet.append((
+                self._run_name(item.run_id), item.transfer_name,
+                item.pre_fault_power, item.final_power, item.classification,
+                mode.frequency_hz if mode else None,
+                mode.damping_ratio * 100 if mode and mode.damping_ratio is not None else None,
+                item.warning or item.comment,
+            ))
         self._format_transfer_sheet(sheet)
 
-    def _write_transfer_damping(self, sheet) -> None:
-        sheet.append(
-            (
-                "Run", "Transfer", "Pre-fault P", "Permanent P", "Status", "Warning", "Comment",
-                "Dominant Frequency [Hz]", "Damping [%]", "Selected Polarity",
-                "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]",
-                "P1", "P2", "A1", "A2", "A2 / A1",
-            )
-        )
+    def _write_transfer_modes(self, sheet) -> None:
+        """Write one database-style row per spectrum candidate."""
+        sheet.append((
+            "Run", "Transfer", "Candidate", "Frequency [Hz]", "Lower Band [Hz]", "Upper Band [Hz]",
+            "Assessment", "Selected Damping [%]", "Selected Extremum",
+            "Envelope Peak Time [s]", "Envelope Peak Amplitude", "Envelope Peak Extremum",
+            "Tail Pairs", "Terminal Sequence Pairs", "Consecutive Pairs", "Note",
+        ))
         for item in self.transfer_analysis.assessments:
-            pair = item.selected_damping_pair
-            direction = 1.0 if pair and pair.polarity == "positive" else -1.0
-            first_peak_power = (
-                item.final_power + direction * pair.first_amplitude if pair else None
-            )
-            second_peak_power = (
-                item.final_power + direction * pair.second_amplitude if pair else None
-            )
-            sheet.append(
-                (
-                    self._run_name(item.run_id), item.transfer_name, item.pre_fault_power,
-                    item.final_power, item.classification, item.warning, item.comment, item.dominant_frequency_hz,
-                    item.damping_ratio * 100 if item.damping_ratio is not None else None,
-                    pair.polarity if pair else None, pair.first_time_s if pair else None,
-                    pair.second_time_s if pair else None, pair.period_s if pair else None,
-                    first_peak_power, second_peak_power,
-                    pair.first_amplitude if pair else None, pair.second_amplitude if pair else None,
-                    pair.second_amplitude / pair.first_amplitude if pair else None,
-                )
-            )
-        self._format_transfer_sheet(sheet)
-
-    def _write_damping_pairs(self, sheet) -> None:
-        sheet.append(("Run", "Transfer", "Selected", "Polarity", "Peak 1 Time [s]", "Peak 2 Time [s]", "A1", "A2", "Period [s]", "Damping [%]"))
-        for item in self.transfer_analysis.assessments:
-            for pair in item.damping_pairs:
+            for index, mode in enumerate(item.modes, start=1):
                 sheet.append((
-                    self._run_name(item.run_id),
-                    item.transfer_name,
-                    pair == item.selected_damping_pair,
-                    pair.polarity,
-                    pair.first_time_s,
-                    pair.second_time_s,
-                    pair.first_amplitude,
-                    pair.second_amplitude,
-                    pair.period_s,
-                    pair.damping_ratio * 100,
+                    self._run_name(item.run_id), item.transfer_name, index, mode.frequency_hz,
+                    mode.lower_band_hz, mode.upper_band_hz,
+                    mode.classification,
+                    mode.damping_ratio * 100 if mode.damping_ratio is not None else None,
+                    mode.selected_extremum,
+                    mode.envelope_peak_time_s, mode.envelope_peak_amplitude,
+                    mode.envelope_peak_extremum, mode.tail_pair_count,
+                    mode.terminal_sequence_pair_count,
+                    len(mode.damping_pairs), mode.message,
                 ))
         self._format_transfer_sheet(sheet)
 
-    def _transfer_damping_summary_for_run(self, run_id: int) -> TransferDampingRunSummary:
-        """Return only actionable active-transfer damping findings for one run."""
-        if self.transfer_analysis is None:
-            return TransferDampingRunSummary("Not evaluated", ())
-        assessments = [
-            item
-            for item in self.transfer_analysis.assessments
-            if item.run_id == run_id
-            and item.status not in {"opened", "inactive_pre_fault"}
-        ]
-        if not assessments:
-            return TransferDampingRunSummary("Not applicable", ())
-        growing_mode = [item for item in assessments if item.status == "growing_mode"]
-        under_damped = [item for item in assessments if item.status == "under_damped"]
-        not_evaluable = [item for item in assessments if item.status == "not_evaluated"]
-        findings = [
-            "Growing mode: "
-            + ", ".join(
-                f"{item.transfer_name} ({item.damping_ratio * 100:.2f}%)"
-                for item in growing_mode
-            )
-        ] if growing_mode else []
-        if under_damped:
-            findings.append(
-                "Under-damped: "
-                + ", ".join(
-                    f"{item.transfer_name} ({item.damping_ratio * 100:.2f}%)"
-                    for item in under_damped
-                )
-            )
-        if not_evaluable:
-            findings.append(
-                "Not evaluated: "
-                + ", ".join(item.transfer_name for item in not_evaluable)
-            )
-        if growing_mode:
-            status = "Growing mode"
-        elif not_evaluable:
-            status = "Not evaluated"
-        elif under_damped:
-            status = "Under-damped"
-        else:
-            status = "Compliant"
-        return TransferDampingRunSummary(status, tuple(findings))
+    def _write_transfer_damping_pairs(self, sheet) -> None:
+        """Write every consecutive same-kind extrema pair used by each mode."""
+        sheet.append((
+            "Run", "Transfer", "Candidate", "Frequency [Hz]", "Selected", "Extremum",
+            "Peak 1 Time [s]", "Peak 2 Time [s]", "Period [s]",
+            "Value 1", "Value 2", "A1", "A2", "A2 / A1", "Damping [%]",
+        ))
+        for item in self.transfer_analysis.assessments:
+            for mode_index, mode in enumerate(item.modes, start=1):
+                for pair in mode.damping_pairs:
+                    sheet.append((
+                        self._run_name(item.run_id), item.transfer_name, mode_index,
+                        mode.frequency_hz,
+                        mode.status != "not_measurable" and pair == mode.selected_pair,
+                        pair.extremum,
+                        pair.first_time_s, pair.second_time_s, pair.period_s,
+                        pair.first_value, pair.second_value,
+                        pair.first_amplitude, pair.second_amplitude, pair.amplitude_ratio,
+                        pair.damping_ratio * 100,
+                    ))
+        self._format_transfer_sheet(sheet)
 
-    @staticmethod
-    def _overall_assessment(voltage_status: str, damping_status: str) -> str:
-        """Combine separate voltage and damping conclusions without hiding either."""
-        if voltage_status == "Stable" and damping_status == "Compliant":
-            return "Fully compliant"
-        if voltage_status == "Stable" and damping_status == "Under-damped":
-            return "Stable with under-damping"
-        if voltage_status == "Unstable" or damping_status == "Growing mode":
-            return "Non-compliant"
-        return "Not evaluated"
+    def _transfer_damping_summary_for_run(self, run_id: int) -> TransferDampingRunSummary:
+        """Return the limiting transfer-damping state without verbose findings."""
+        if self.transfer_analysis is None:
+            return TransferDampingRunSummary("Not measurable", None)
+        assessments = [
+            item for item in self.transfer_analysis.assessments
+            if item.run_id == run_id and item.status not in {"opened", "inactive_pre_fault"}
+        ]
+        damping = [item.damping_ratio for item in assessments if item.damping_ratio is not None]
+        if not assessments:
+            return TransferDampingRunSummary("Not applicable", None)
+        if any(item.status == "growing" for item in assessments):
+            status = "Growing"
+        elif any(item.status == "damped_under" for item in assessments):
+            status = "Damped under"
+        elif damping:
+            status = "Damped"
+        else:
+            status = "Not measurable"
+        return TransferDampingRunSummary(status, min(damping) * 100 if damping else None)
 
     def _write_initialization(self, sheet) -> None:
         sheet.append(
@@ -369,11 +282,11 @@ class AnalysisReport:
 
         self._format_sheet(sheet)
 
-    def _write_criteria(self, sheet) -> None:
+    def _write_definitions(self, sheet) -> None:
         reference_analysis = self.study_analysis.bus_analyses[0].signal_analysis
         initialization = self._initialization_criteria(reference_analysis)
         stability = self._stability_criteria(reference_analysis)
-        sheet.append(("Analysis", "Criterion", "Value"))
+        sheet.append(("Area", "Definition / Criterion", "Value"))
         rows = [
             ("Initialization", "Evaluation window [s]", f"{initialization.evaluation_start_time_s:.2f} to {initialization.evaluation_end_time_s:.2f}"),
             ("Initialization", "Smoothing window [s]", initialization.smoothing_duration_s),
@@ -395,7 +308,7 @@ class AnalysisReport:
                 (
                     (
                         "Transfer damping",
-                        "Electromechanical mode band [Hz]",
+                        "Electromechanical response band [Hz]",
                         f"{transfer_criteria.mode_minimum_frequency_hz:.1f} to "
                         f"{transfer_criteria.mode_maximum_frequency_hz:.1f}",
                     ),
@@ -411,12 +324,27 @@ class AnalysisReport:
                     ),
                     (
                         "Transfer damping",
-                        "Growing-mode confirmation",
-                        (
-                            f"{transfer_criteria.growth_confirmation_peak_count} consecutive extrema, "
-                            f"each at least {((transfer_criteria.growth_confirmation_amplitude_ratio - 1) * 100):.0f}% larger"
-                        ),
+                        "Mode detection",
+                        "Every local spectrum maximum in the response band; the global maximum is included at a band edge.",
                     ),
+                    (
+                        "Transfer damping",
+                        "Mode bands",
+                        "Each candidate is bounded by its nearest spectral valleys; outer candidates use the response-band limits when a valley is unavailable.",
+                    ),
+                    ("Transfer damping", "Reference", "P_final is the median transfer power in the final window."),
+                    ("Transfer damping", "Measured signal", "P(t) - P_final; each spectral mode is evaluated independently."),
+                    ("Transfer damping", "Damping pairs", "Consecutive local maxima or consecutive local minima of the isolated EM signal, following the NT logarithmic-decrement method."),
+                    ("Transfer damping", "Extremum amplitude", "Each local extremum keeps its signed signal value and uses its absolute distance from P_final for the logarithmic decrement. Zero crossings are retained."),
+                    ("Transfer damping", "Damping phase", "Contains consecutive pairs of the same local-extremum kind after the maximum observed EM amplitude."),
+                    ("Transfer damping", "Terminal sequence", "Starts at the final pair and extends backwards only while its envelope direction is unchanged."),
+                    ("Transfer damping", "Selected pair", "Decreasing terminal sequence: largest positive xi. Non-decreasing terminal sequence: most negative xi."),
+                    ("Transfer damping", "Direction boundary", "An earlier pair is not selected across an intervening pair with the opposite envelope direction."),
+                    ("Transfer damping", "Available evidence", "One valid pair in the terminal sequence is sufficient; both tail and terminal-sequence counts are reported."),
+                    ("Transfer damping", "Damped", f"All measurable modes have xi >= {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
+                    ("Transfer damping", "Damped under", f"At least one measurable mode has 0% < xi < {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
+                    ("Transfer damping", "Growing", "At least one measurable mode ends with a non-decreasing terminal sequence (xi <= 0%)."),
+                    ("Transfer damping", "Not measurable", "No detected mode has a valid consecutive local-extremum pair after its envelope maximum."),
                     ("Transfer damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
                 )
             )

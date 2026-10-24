@@ -46,4 +46,3 @@ class MonteCarloContext:
             )
         ]
         return path
-

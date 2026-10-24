@@ -15,7 +15,7 @@ if __name__ == "__main__":
     scenario = ContingencyScenario(
         name="KIMAL CC-2PH-G",
         severity=4,
-        fault_type="two_phase_to_ground"
+        fault_type="two_phase_to_ground",
         fault_time_s=1.0,
         clearance_time_s=1.12,
         location="KIMAL_220",

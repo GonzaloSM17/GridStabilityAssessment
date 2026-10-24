@@ -3,7 +3,13 @@
 from math import exp, pi, sqrt
 import unittest
 
-from transfer_analysis import assess_transfer_damping
+from transfer_analysis import (
+    DampingCriteria,
+    DampingPair,
+    _spectral_mode_bands,
+    _terminal_direction_sequence,
+    assess_transfer_damping,
+)
 
 
 class TransferDampingTests(unittest.TestCase):
@@ -45,7 +51,7 @@ class TransferDampingTests(unittest.TestCase):
             values.append(90.0 + mode + ripple)
         return values
 
-    def test_identifies_the_dominant_electromechanical_mode(self):
+    def test_identifies_a_measurable_electromechanical_mode(self):
         result = assess_transfer_damping(
             self.time,
             self.power_with_mode(high_frequency_ripple=True),
@@ -53,13 +59,13 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "compliant")
-        self.assertAlmostEqual(result.dominant_frequency_hz, 1.0, delta=0.3)
-        self.assertIsNotNone(result.selected_damping_pair)
+        self.assertEqual(result.status, "damped")
+        self.assertIsNotNone(result.critical_mode)
+        self.assertAlmostEqual(result.critical_mode.frequency_hz, 1.0, delta=0.35)
         self.assertAlmostEqual(result.damping_ratio, 0.10, delta=0.03)
-        self.assertGreaterEqual(result.selected_damping_pair.period_s, 0.5)
+        self.assertGreaterEqual(result.critical_mode.selected_pair.period_s, 0.5)
 
-    def test_negative_initial_excursion_uses_same_sign_valleys(self):
+    def test_negative_initial_excursion_is_measured_without_using_transfer_direction(self):
         result = assess_transfer_damping(
             self.time,
             self.power_with_mode(starts_negative=True),
@@ -67,10 +73,10 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "compliant")
-        self.assertEqual(result.selected_damping_pair.polarity, "negative")
+        self.assertEqual(result.status, "damped")
+        self.assertIsNotNone(result.critical_mode)
 
-    def test_positive_initial_excursion_uses_same_sign_peaks(self):
+    def test_positive_initial_excursion_is_measured_without_using_transfer_direction(self):
         result = assess_transfer_damping(
             self.time,
             self.power_with_mode(starts_negative=False),
@@ -78,8 +84,8 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "compliant")
-        self.assertEqual(result.selected_damping_pair.polarity, "positive")
+        self.assertEqual(result.status, "damped")
+        self.assertIsNotNone(result.critical_mode)
 
     def test_fast_ripple_is_not_an_electromechanical_mode(self):
         values = []
@@ -100,7 +106,7 @@ class TransferDampingTests(unittest.TestCase):
         self.assertIsNone(result.damping_ratio)
         self.assertIn(
             result.status,
-            {"not_evaluated"},
+            {"not_measurable"},
         )
 
     def test_classifies_positive_but_low_damping_as_under_damped(self):
@@ -111,7 +117,7 @@ class TransferDampingTests(unittest.TestCase):
             transfer_name="NC_TEST_C1",
         )
 
-        self.assertEqual(result.status, "under_damped")
+        self.assertEqual(result.status, "damped_under")
         self.assertGreater(result.damping_ratio, 0.0)
         self.assertLess(result.damping_ratio, 0.05)
 
@@ -126,6 +132,32 @@ class TransferDampingTests(unittest.TestCase):
 
         self.assertEqual(result.status, "opened")
         self.assertIsNone(result.damping_ratio)
+
+    def test_candidate_bands_use_nearest_spectral_valleys(self):
+        bands = _spectral_mode_bands(
+            frequencies=(0.2, 0.4, 0.6, 0.8, 1.0, 1.2),
+            powers=(1.0, 4.0, 1.0, 3.0, 1.0, 0.5),
+            candidate_indices=(1, 3),
+            criteria=DampingCriteria(),
+        )
+
+        self.assertEqual(
+            bands,
+            (
+                (0.4, 0.2, 0.6),
+                (0.8, 0.6, 1.0),
+            ),
+        )
+
+    def test_terminal_sequence_does_not_cross_an_opposite_direction_pair(self):
+        pairs = (
+            DampingPair("maximum", 2.0, 3.0, 10.0, 8.0, 1.0, 0.03, 10.0, 8.0),
+            DampingPair("maximum", 3.0, 4.0, 8.0, 9.0, 1.0, -0.02, 8.0, 9.0),
+            DampingPair("maximum", 4.0, 5.0, 9.0, 7.0, 1.0, 0.04, 9.0, 7.0),
+            DampingPair("maximum", 5.0, 6.0, 7.0, 4.0, 1.0, 0.08, 7.0, 4.0),
+        )
+
+        self.assertEqual(_terminal_direction_sequence(pairs), pairs[2:])
 
 
 if __name__ == "__main__":

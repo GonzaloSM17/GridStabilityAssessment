@@ -6,6 +6,7 @@ from analyzer import AnalysisPipeline, SignalStudyAnalysis, _round_up_to_nice_nu
 from transfer_analysis import (
     DampingCriteria,
     DampingPair,
+    ElectromechanicalMode,
     TransferRunAssessment,
     TransferStudyAnalysis,
 )
@@ -43,24 +44,37 @@ class NoStabilityAssessmentTests(unittest.TestCase):
 class TransferDampingPlotTests(unittest.TestCase):
     def test_negative_damping_values_keep_the_five_percent_axis_limit(self):
         pair = DampingPair(
-            polarity="positive",
-            first_time_s=1.2,
-            second_time_s=2.2,
+            extremum="maximum",
+            first_time_s=2.2,
+            second_time_s=3.2,
             first_amplitude=3.0,
             second_amplitude=4.0,
             period_s=1.0,
             damping_ratio=-0.037,
+            first_value=3.0,
+            second_value=4.0,
+        )
+        mode = ElectromechanicalMode(
+            frequency_hz=1.0,
+            lower_band_hz=0.8,
+            upper_band_hz=1.2,
+            status="growing",
+            damping_pairs=(pair,),
+            selected_pair=pair,
+            envelope_peak_time_s=2.2,
+            envelope_peak_amplitude=3.0,
+            envelope_peak_extremum="maximum",
+            tail_pair_count=1,
+            terminal_sequence_pair_count=1,
         )
         assessment = TransferRunAssessment(
             run_id=1,
             transfer_name="NC_TEST_C1",
             pre_fault_power=100.0,
             final_power=90.0,
-            status="growing_mode",
-            dominant_frequency_hz=1.0,
-            warning="The selected dominant-mode envelope grows.",
-            damping_pairs=(pair,),
-            selected_damping_pair=pair,
+            status="growing",
+            warning="The selected electromechanical-response envelope grows.",
+            modes=(mode,),
             criteria=DampingCriteria(),
         )
         figure = object.__new__(AnalysisPipeline).plot_transfer_damping_summary(

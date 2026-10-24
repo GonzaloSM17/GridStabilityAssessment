@@ -22,6 +22,7 @@ from transfer_analysis import (
     DampingCriteria,
     TransferStudyAnalysis,
     assess_transfer_damping,
+    isolate_mode,
 )
 
 
@@ -562,7 +563,7 @@ class AnalysisPipeline:
                     elif assessment.status in {
                         "opened",
                         "inactive_pre_fault",
-                        "not_evaluated",
+                        "not_measurable",
                     }:
                         color = "#9E9E9E"
                 axis.plot(
@@ -601,9 +602,9 @@ class AnalysisPipeline:
             )
         else:
             legend_handles[0:0] = [
-                Line2D((0,), (0,), color="#D73027", alpha=0.65, label="Evaluated: xi below 5%"),
-                Line2D((0,), (0,), color="#009E73", alpha=0.65, label="Evaluated: xi above 5%"),
-                Line2D((0,), (0,), color="#9E9E9E", alpha=0.65, label="No damping pair / opened"),
+                Line2D((0,), (0,), color="#D73027", alpha=0.65, label="Growing or damped under"),
+                Line2D((0,), (0,), color="#009E73", alpha=0.65, label="Damped (xi at least 5%)"),
+                Line2D((0,), (0,), color="#9E9E9E", alpha=0.65, label="Not measurable / not applicable"),
             ]
         figure.legend(
             handles=legend_handles,
@@ -639,7 +640,7 @@ class AnalysisPipeline:
             if assessment.damping_ratio is not None
         )
         if not damping_ratios:
-            raise ValueError("No transfer contains identifiable damping pairs.")
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
         normalization, color_map = _damping_color_scale(damping_ratios)
         evaluated_transfer_names = tuple(
             transfer_name
@@ -667,6 +668,7 @@ class AnalysisPipeline:
                 edgecolors="none",
             )
             labels.append(f"{transfer_name}\n{len(evaluated)} evaluated")
+        axis.axvline(0.0, color="#555555", linestyle="-", linewidth=1.0, label="0% damping")
         axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2, label="5% limit")
         axis.set_yticks(range(len(evaluated_transfer_names)), labels)
         axis.set_xlabel("Damping ratio, xi (%)")
@@ -686,7 +688,7 @@ class AnalysisPipeline:
             item.status in {
                 "opened",
                 "inactive_pre_fault",
-                "not_evaluated",
+                "not_measurable",
             }
             for item in analysis.assessments
         )
@@ -695,8 +697,8 @@ class AnalysisPipeline:
                 0.5,
                 0.01,
                 f"{excluded_transfer_count} transfer(s), {excluded_run_count} run assessment(s) "
-                "excluded from xi distribution: opened, inactive, or not evaluated. "
-                "See Transfer Summary in the report.",
+                "excluded from xi distribution: opened, inactive, or not measurable. "
+                "See Transfer Assessments in the report.",
                 ha="center",
                 va="bottom",
                 fontsize=8,
@@ -712,7 +714,7 @@ class AnalysisPipeline:
         start_time_s: float = 1.12,
         end_time_s: float | None = None,
     ):
-        """Plot the lowest selected dominant-mode damping case per transfer."""
+        """Plot the limiting measured EM mode per transmission transfer."""
         import matplotlib.pyplot as plt
         import numpy as np
 
@@ -722,12 +724,12 @@ class AnalysisPipeline:
             assessed = [
                 item
                 for item in analysis.assessments_for_transfer(transfer_name)
-                if item.selected_damping_pair is not None
+                if item.critical_mode is not None
             ]
             if assessed:
                 lowest_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
         if not lowest_assessments:
-            raise ValueError("No transfer contains identifiable damping pairs.")
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
 
         transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
         run_by_id = {run.run_id: run for run in self.context.runs}
@@ -741,18 +743,14 @@ class AnalysisPipeline:
             data = run.dataset.read_series_window(
                 (transfer.column_name,), start_time_s, end_time_s
             )
-            pair = assessment.selected_damping_pair
+            mode = assessment.critical_mode
+            pair = mode.selected_pair
             axis.plot(data["time"], data[transfer.column_name], color="#4C78A8", linewidth=0.8)
             axis.axhline(assessment.final_power, color="#1F3A5F", linestyle="--", linewidth=1.0)
             peak_values = [
-                assessment.final_power + pair.first_amplitude,
-                assessment.final_power + pair.second_amplitude,
+                assessment.final_power + pair.first_value,
+                assessment.final_power + pair.second_value,
             ]
-            if pair.polarity == "negative":
-                peak_values = [
-                    assessment.final_power - pair.first_amplitude,
-                    assessment.final_power - pair.second_amplitude,
-                ]
             axis.scatter(
                 (pair.first_time_s, pair.second_time_s),
                 peak_values,
@@ -762,7 +760,7 @@ class AnalysisPipeline:
             )
             axis.set_title(
                 f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
-                f"f={assessment.dominant_frequency_hz:.2f} Hz | "
+                f"f_mode={mode.frequency_hz:.2f} Hz | "
                 f"xi={assessment.damping_ratio * 100:.2f}%",
                 fontsize=8.5,
                 pad=8,
@@ -777,7 +775,103 @@ class AnalysisPipeline:
             if axis.get_visible():
                 axis.set_xlabel("Time (s)")
         figure.suptitle(
-            "Lowest Selected Dominant-Mode Damping Case by 500 kV Transmission System",
+            "Lowest Measured Electromechanical-Mode Damping by 500 kV Transmission System",
+            y=0.985,
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.985,
+            bottom=0.07,
+            top=0.92,
+            hspace=0.48,
+            wspace=0.22,
+        )
+        return figure
+
+    def plot_worst_transfer_electromechanical_cases(
+        self,
+        analysis: TransferStudyAnalysis,
+    ):
+        """Plot isolated EM components for the same transfer cases shown in figure 03."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        lowest_assessments = []
+        for transfer_name in analysis.transfer_names:
+            assessed = [
+                item
+                for item in analysis.assessments_for_transfer(transfer_name)
+                if item.critical_mode is not None
+            ]
+            if assessed:
+                lowest_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
+        if not lowest_assessments:
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
+
+        transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
+        run_by_id = {run.run_id: run for run in self.context.runs}
+        columns = 3
+        rows = ceil(len(lowest_assessments) / columns)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.9 * rows), sharex=False)
+        axes = np.asarray(axes).reshape(-1)
+        for axis, assessment in zip(axes, lowest_assessments):
+            transfer = transfer_by_name[assessment.transfer_name]
+            run = run_by_id[assessment.run_id]
+            mode = assessment.critical_mode
+            pair = mode.selected_pair
+            start_time_s = assessment.criteria.analysis_start_time_s
+            end_time_s = run.dataset.maximum_time_s()
+            data = run.dataset.read_series_window(
+                (transfer.column_name,), start_time_s, end_time_s
+            )
+            samples = list(zip(
+                data["time"].to_list(),
+                (data[transfer.column_name] - assessment.final_power).to_list(),
+            ))
+            isolated = isolate_mode(
+                samples,
+                mode.lower_band_hz,
+                mode.upper_band_hz,
+            )
+            if isolated is None:
+                axis.text(
+                    0.5,
+                    0.5,
+                    "Mode could not be isolated.",
+                    ha="center",
+                    va="center",
+                    transform=axis.transAxes,
+                )
+            else:
+                time, response = zip(*isolated)
+                axis.plot(time, response, color="#5B3F8C", linewidth=1.1)
+                axis.scatter(
+                    (pair.first_time_s, pair.second_time_s),
+                    (pair.first_value, pair.second_value),
+                    color="#D73027",
+                    s=28,
+                    zorder=3,
+                )
+            axis.axhline(0.0, color="#555555", linewidth=0.75)
+            axis.set_title(
+                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"f_mode={mode.frequency_hz:.2f} Hz | "
+                f"xi={assessment.damping_ratio * 100:.2f}%",
+                fontsize=8.5,
+                pad=8,
+            )
+            axis.grid(visible=True, alpha=0.3)
+            axis.set_xlim(start_time_s, end_time_s)
+        for axis in axes[len(lowest_assessments):]:
+            axis.set_visible(False)
+        for axis in axes[::columns]:
+            if axis.get_visible():
+                axis.set_ylabel("P(t) - P_final")
+        for axis in axes:
+            if axis.get_visible():
+                axis.set_xlabel("Time (s)")
+        figure.suptitle(
+            "Isolated Electromechanical Components for Worst 500 kV Transfer Damping Cases",
             y=0.985,
         )
         figure.subplots_adjust(

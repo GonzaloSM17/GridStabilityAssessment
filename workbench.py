@@ -222,6 +222,12 @@ class MonteCarloWorkbench:
                             transfer_analysis
                         ),
                     ),
+                    (
+                        "04_worst_damping_em_components.png",
+                        self.pipeline.plot_worst_transfer_electromechanical_cases(
+                            transfer_analysis
+                        ),
+                    ),
                 )
             )
         return tuple(

@@ -78,6 +78,8 @@ class EvaluationProfile:
                 analysis_start_time_s=(
                     scenario.clearance_time_s + damping_start_after_clearance_s
                 ),
+                mode_minimum_frequency_hz=0.2,
+                mode_maximum_frequency_hz=2.5,
             ),
         )
 

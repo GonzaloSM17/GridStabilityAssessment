@@ -8,7 +8,7 @@ from typing import Sequence
 
 @dataclass(frozen=True)
 class DampingCriteria:
-    """Configuration for identifying one dominant electromechanical power mode."""
+    """Configuration for post-contingency electromechanical mode assessment."""
 
     pre_fault_start_time_s: float = 0.9
     fault_time_s: float = 1.0
@@ -20,65 +20,106 @@ class DampingCriteria:
     minimum_pre_fault_power: float = 1.0
     opened_final_power_ratio: float = 0.05
     mode_minimum_frequency_hz: float = 0.2
-    mode_maximum_frequency_hz: float = 2.0
-    mode_filter_half_width_hz: float = 0.25
-    minimum_peak_relative_amplitude: float = 0.02
+    mode_maximum_frequency_hz: float = 2.5
     minimum_damping_ratio: float = 0.05
-    growth_confirmation_peak_count: int = 3
-    growth_confirmation_amplitude_ratio: float = 1.05
 
 
 @dataclass(frozen=True)
 class DampingPair:
-    """Two consecutive same-sign extrema of the isolated power mode."""
+    """Two consecutive local extrema of the same kind in an isolated mode."""
 
-    polarity: str
+    extremum: str
     first_time_s: float
     second_time_s: float
     first_amplitude: float
     second_amplitude: float
     period_s: float
     damping_ratio: float
+    first_value: float
+    second_value: float
+
+    @property
+    def amplitude_ratio(self) -> float:
+        return self.second_amplitude / self.first_amplitude
+
+
+@dataclass(frozen=True)
+class ElectromechanicalMode:
+    """One spectral candidate with its band and consecutive damping pairs."""
+
+    frequency_hz: float
+    lower_band_hz: float
+    upper_band_hz: float
+    status: str
+    damping_pairs: tuple[DampingPair, ...]
+    selected_pair: DampingPair | None
+    envelope_peak_time_s: float | None
+    envelope_peak_amplitude: float | None
+    envelope_peak_extremum: str | None
+    tail_pair_count: int
+    terminal_sequence_pair_count: int
+    message: str | None = None
+
+    @property
+    def damping_ratio(self) -> float | None:
+        return self.selected_pair.damping_ratio if self.selected_pair else None
+
+    @property
+    def selected_extremum(self) -> str | None:
+        return self.selected_pair.extremum if self.selected_pair else None
+
+    @property
+    def classification(self) -> str:
+        return {
+            "damped": "Damped",
+            "damped_under": "Damped under",
+            "growing": "Growing",
+            "not_measurable": "Not measurable",
+        }[self.status]
 
 
 @dataclass(frozen=True)
 class TransferRunAssessment:
-    """One transfer's dominant electromechanical-mode result in one run."""
+    """All observable electromechanical modes of one transfer in one run."""
 
     run_id: int
     transfer_name: str
     pre_fault_power: float
     final_power: float
     status: str
-    dominant_frequency_hz: float | None
-    warning: str | None
-    damping_pairs: tuple[DampingPair, ...]
-    selected_damping_pair: DampingPair | None
+    modes: tuple[ElectromechanicalMode, ...]
     criteria: DampingCriteria
+    warning: str | None = None
     comment: str | None = None
 
     @property
+    def critical_mode(self) -> ElectromechanicalMode | None:
+        """Return the observed mode with the smallest damping ratio."""
+        measurable = [
+            mode
+            for mode in self.modes
+            if mode.status != "not_measurable" and mode.damping_ratio is not None
+        ]
+        return min(measurable, key=lambda mode: mode.damping_ratio) if measurable else None
+
+    @property
     def damping_ratio(self) -> float | None:
-        """Return the damping of the selected dominant-mode pair."""
-        if self.selected_damping_pair is None:
-            return None
-        return self.selected_damping_pair.damping_ratio
+        mode = self.critical_mode
+        return mode.damping_ratio if mode else None
 
     @property
     def is_compliant(self) -> bool | None:
-        """Return the 5-percent compliance result when the mode is evaluable."""
-        if self.status == "not_evaluated" or self.damping_ratio is None:
+        if self.status in {"not_measurable", "inactive_pre_fault", "opened"}:
             return None
-        return self.status == "compliant"
+        return self.status == "damped"
 
     @property
     def classification(self) -> str:
-        """Return the human-readable damping conclusion for this transfer."""
         return {
-            "compliant": "Compliant",
-            "under_damped": "Under-damped",
-            "growing_mode": "Growing mode",
-            "not_evaluated": "Not evaluated",
+            "damped": "Damped",
+            "damped_under": "Damped under",
+            "growing": "Growing",
+            "not_measurable": "Not measurable",
             "inactive_pre_fault": "Not applicable",
             "opened": "Not applicable",
         }[self.status]
@@ -95,21 +136,10 @@ class TransferStudyAnalysis:
         return tuple(sorted({assessment.transfer_name for assessment in self.assessments}))
 
     def assessments_for_transfer(self, transfer_name: str) -> tuple[TransferRunAssessment, ...]:
-        return tuple(
-            assessment
-            for assessment in self.assessments
-            if assessment.transfer_name == transfer_name
-        )
+        return tuple(item for item in self.assessments if item.transfer_name == transfer_name)
 
     def assessment_for(self, run_id: int, transfer_name: str) -> TransferRunAssessment | None:
-        return next(
-            (
-                assessment
-                for assessment in self.assessments
-                if assessment.run_id == run_id and assessment.transfer_name == transfer_name
-            ),
-            None,
-        )
+        return next((item for item in self.assessments if item.run_id == run_id and item.transfer_name == transfer_name), None)
 
 
 def assess_transfer_damping(
@@ -120,361 +150,332 @@ def assess_transfer_damping(
     transfer_name: str,
     criteria: DampingCriteria | None = None,
 ) -> TransferRunAssessment:
-    """Identify and assess the dominant 0.2-2.0 Hz power oscillation mode.
+    """Assess every identifiable 0.2-2.5 Hz mode of one power transfer.
 
-    The global study stability result is deliberately not affected by this
-    assessment.  It is an independent transfer-level normative diagnostic.
+    ``P_final`` is retained as the physical post-contingency reference. The
+    assessed signal is ``P(t) - P_final``. Modes are discovered in the whole
+    target band and measured independently; mixed responses get no single xi.
     """
     criteria = criteria or DampingCriteria()
     _validate_criteria(criteria)
     if len(time_values) != len(power_values) or len(time_values) < 3:
         raise ValueError("Transfer damping requires matching time and power samples.")
-
     samples = [(float(time), float(power)) for time, power in zip(time_values, power_values)]
     if any(right[0] <= left[0] for left, right in zip(samples, samples[1:])):
         raise ValueError("Transfer time samples must be strictly increasing.")
     if samples[-1][0] < criteria.minimum_simulation_end_time_s:
         raise ValueError("Transfer signal ends before final-reference evaluation time.")
 
-    pre_fault_values = [
-        value
-        for time, value in samples
-        if criteria.pre_fault_start_time_s <= time < criteria.fault_time_s
-    ]
+    pre_fault_values = [value for time, value in samples if criteria.pre_fault_start_time_s <= time < criteria.fault_time_s]
     if not pre_fault_values:
         raise ValueError("Transfer signal does not cover the pre-fault window.")
-    pre_fault_power = median(pre_fault_values)
-
-    final_start_time_s = samples[-1][0] - criteria.final_reference_duration_s
-    final_values = [value for time, value in samples if time >= final_start_time_s]
+    final_start = samples[-1][0] - criteria.final_reference_duration_s
+    final_values = [value for time, value in samples if time >= final_start]
     if not final_values:
         raise ValueError("Transfer signal does not cover the final-reference window.")
+    pre_fault_power = median(pre_fault_values)
     final_power = median(final_values)
-
-    common = dict(
-        run_id=run_id,
-        transfer_name=transfer_name,
-        pre_fault_power=pre_fault_power,
-        final_power=final_power,
-        criteria=criteria,
-    )
+    common = dict(run_id=run_id, transfer_name=transfer_name, pre_fault_power=pre_fault_power, final_power=final_power, criteria=criteria)
     if abs(pre_fault_power) < criteria.minimum_pre_fault_power:
-        return TransferRunAssessment(
-            status="inactive_pre_fault",
-            dominant_frequency_hz=None,
-            warning=None,
-            damping_pairs=(),
-            selected_damping_pair=None,
-            comment="Transfer is inactive before the contingency.",
-            **common,
-        )
+        return TransferRunAssessment(status="inactive_pre_fault", modes=(), comment="Transfer is inactive before the contingency.", **common)
     if abs(final_power) <= abs(pre_fault_power) * criteria.opened_final_power_ratio:
+        return TransferRunAssessment(status="opened", modes=(), comment="Transfer is open in the final operating condition.", **common)
+
+    mode_start = max(criteria.analysis_start_time_s, criteria.clearance_time_s + criteria.post_clearance_guard_time_s)
+    deviation = [(time, value - final_power) for time, value in samples if time >= mode_start]
+    mode_bands = _detect_mode_bands(deviation, criteria)
+    if not mode_bands:
         return TransferRunAssessment(
-            status="opened",
-            dominant_frequency_hz=None,
-            warning=None,
-            damping_pairs=(),
-            selected_damping_pair=None,
-            comment="Transfer is open in the final operating condition.",
+            status="not_measurable", modes=(),
+            warning=("No identifiable electromechanical mode was found within "
+                     f"{criteria.mode_minimum_frequency_hz:.1f}-{criteria.mode_maximum_frequency_hz:.1f} Hz."),
             **common,
         )
-
-    mode_start_time_s = max(
-        criteria.analysis_start_time_s,
-        criteria.clearance_time_s + criteria.post_clearance_guard_time_s,
+    modes = tuple(
+        _measure_mode(deviation, frequency, lower, upper, criteria)
+        for frequency, lower, upper in mode_bands
     )
-    mode_samples = [
-        (time, value - final_power)
-        for time, value in samples
-        if time >= mode_start_time_s
+    measurable = [
+        mode
+        for mode in modes
+        if mode.status != "not_measurable" and mode.damping_ratio is not None
     ]
-    frequency_hz, filtered_response = _isolate_dominant_mode(mode_samples, criteria)
-    if frequency_hz is None or filtered_response is None:
+    if not measurable:
         return TransferRunAssessment(
-            status="not_evaluated",
-            dominant_frequency_hz=None,
-            warning=(
-                "No dominant electromechanical mode was identified within "
-                f"{criteria.mode_minimum_frequency_hz:.1f}-{criteria.mode_maximum_frequency_hz:.1f} Hz."
-            ),
-            damping_pairs=(),
-            selected_damping_pair=None,
+            status="not_measurable", modes=modes,
+            warning="Detected electromechanical content could not be measured over two local extrema of the same kind.",
             **common,
         )
-
-    amplitude_floor = abs(pre_fault_power) * criteria.minimum_peak_relative_amplitude
-    positive_peaks, negative_peaks = _same_sign_extrema(
-        filtered_response,
-        amplitude_floor,
-        minimum_peak_distance_s=0.5 / criteria.mode_maximum_frequency_hz,
-    )
-    minimum_period_s = 1.0 / criteria.mode_maximum_frequency_hz
-    maximum_period_s = 1.0 / criteria.mode_minimum_frequency_hz
-    damping_pairs = tuple(
-        [
-            *_damping_pairs(
-                positive_peaks,
-                "positive",
-                minimum_period_s,
-                maximum_period_s,
-            ),
-            *_damping_pairs(
-                negative_peaks,
-                "negative",
-                minimum_period_s,
-                maximum_period_s,
-            ),
-        ]
-    )
-    if not damping_pairs:
-        available_duration_s = mode_samples[-1][0] - mode_samples[0][0]
-        required_duration_s = 1.0 / frequency_hz
-        if available_duration_s >= required_duration_s:
-            return TransferRunAssessment(
-                status="not_evaluated",
-                dominant_frequency_hz=frequency_hz,
-                warning=(
-                    f"A {frequency_hz:.2f} Hz candidate was found, but no two "
-                    "significant same-sign extrema were retained for damping evaluation."
-                ),
-                damping_pairs=(),
-                selected_damping_pair=None,
-                **common,
-            )
-        return TransferRunAssessment(
-            status="not_evaluated",
-            dominant_frequency_hz=frequency_hz,
-            warning=(
-                f"Dominant mode {frequency_hz:.2f} Hz needs at least "
-                f"{required_duration_s:.2f} s for one complete cycle; "
-                f"only {available_duration_s:.2f} s are available."
-            ),
-            damping_pairs=(),
-            selected_damping_pair=None,
-            **common,
-        )
-
-    initial_polarity = _initial_response_polarity(mode_samples, amplitude_floor)
-    selected_pair = _select_initial_polarity_pair(damping_pairs, initial_polarity)
-    if selected_pair is None:
-        return TransferRunAssessment(
-            status="not_evaluated",
-            dominant_frequency_hz=frequency_hz,
-            warning=(
-                "No same-sign damping pair is available for the initial "
-                f"{initial_polarity or 'meaningful'} response direction."
-            ),
-            damping_pairs=damping_pairs,
-            selected_damping_pair=None,
-            **common,
-        )
-    if selected_pair.damping_ratio < 0.0 and _has_confirmed_growth(
-        damping_pairs,
-        selected_pair,
-        criteria,
-    ):
-        status = "growing_mode"
-        warning = (
-            "The selected dominant-mode envelope grows consistently across "
-            f"{criteria.growth_confirmation_peak_count} same-sign extrema."
-        )
-    elif selected_pair.damping_ratio <= 0.0:
-        status = "not_evaluated"
-        warning = (
-            "An isolated non-decaying peak pair was found, but growing behavior "
-            "was not confirmed across the mode envelope."
-        )
-    elif selected_pair.damping_ratio < criteria.minimum_damping_ratio:
-        status = "under_damped"
-        warning = f"Damping is below the {criteria.minimum_damping_ratio * 100:.0f}% limit."
+    if any(mode.status == "growing" for mode in measurable):
+        status, warning = "growing", "At least one observed electromechanical mode has non-positive damping."
+    elif any(mode.status == "damped_under" for mode in measurable):
+        status, warning = "damped_under", f"At least one observed mode is below the {criteria.minimum_damping_ratio * 100:.0f}% limit."
     else:
-        status = "compliant"
-        warning = None
-
-    return TransferRunAssessment(
-        status=status,
-        dominant_frequency_hz=frequency_hz,
-        warning=warning,
-        damping_pairs=damping_pairs,
-        selected_damping_pair=selected_pair,
-        **common,
-    )
+        status, warning = "damped", None
+    return TransferRunAssessment(status=status, modes=modes, warning=warning, **common)
 
 
 def _validate_criteria(criteria: DampingCriteria) -> None:
     if not 0.0 < criteria.mode_minimum_frequency_hz < criteria.mode_maximum_frequency_hz:
         raise ValueError("The electromechanical mode frequency limits are invalid.")
     if criteria.post_clearance_guard_time_s < 0.0:
-        raise ValueError("The post-clearance guard time cannot be negative.")
+        raise ValueError("The post-clearance guard duration cannot be negative.")
     if criteria.analysis_start_time_s < criteria.clearance_time_s:
         raise ValueError("Damping analysis must not start before contingency clearance.")
-    if criteria.growth_confirmation_peak_count < 3:
-        raise ValueError("Growing-mode confirmation requires at least three extrema.")
-    if criteria.growth_confirmation_amplitude_ratio <= 1.0:
-        raise ValueError("The growing-mode confirmation ratio must exceed one.")
 
 
-def _isolate_dominant_mode(
+def _detect_mode_bands(
     samples: Sequence[tuple[float, float]],
     criteria: DampingCriteria,
-) -> tuple[float | None, list[tuple[float, float]] | None]:
-    """Find the highest-energy target-band mode and isolate it around its frequency."""
+) -> tuple[tuple[float, float, float], ...]:
+    """Return every local spectral maximum with its spectral-basin band.
+
+    The outer band limits come from the accepted electromechanical range. The
+    nearest spectral valleys delimit each local candidate, so no prominence
+    threshold, maximum count, or fixed filter width is introduced.
+    """
     import numpy as np
     from scipy import signal
 
     if len(samples) < 16:
-        return None, None
+        return ()
     time = np.asarray([sample[0] for sample in samples], dtype=float)
     response = np.asarray([sample[1] for sample in samples], dtype=float)
-    time_step_s = float(np.median(np.diff(time)))
-    if time_step_s <= 0.0:
-        return None, None
-    sample_frequency_hz = 1.0 / time_step_s
-    if sample_frequency_hz <= 2.5 * criteria.mode_maximum_frequency_hz:
-        return None, None
-
-    uniform_time = np.arange(time[0], time[-1] + time_step_s / 2.0, time_step_s)
+    time_step = float(np.median(np.diff(time)))
+    if time_step <= 0.0:
+        return ()
+    sample_frequency = 1.0 / time_step
+    if sample_frequency <= 2.5 * criteria.mode_maximum_frequency_hz:
+        return ()
+    uniform_time = np.arange(time[0], time[-1] + time_step / 2.0, time_step)
     uniform_response = np.interp(uniform_time, time, response)
-    detrended_response = signal.detrend(uniform_response, type="linear")
-    frequencies, powers = signal.periodogram(
-        detrended_response,
-        fs=sample_frequency_hz,
-        window="hann",
-        scaling="spectrum",
+    frequencies, powers = signal.periodogram(signal.detrend(uniform_response, type="linear"), fs=sample_frequency, window="hann", scaling="spectrum")
+    in_band = (frequencies >= criteria.mode_minimum_frequency_hz) & (frequencies <= criteria.mode_maximum_frequency_hz)
+    band_frequencies, band_powers = frequencies[in_band], powers[in_band]
+    if len(band_frequencies) == 0 or not np.any(band_powers > 0.0):
+        return ()
+    peak_indices, _ = signal.find_peaks(band_powers)
+    candidate_indices = set(peak_indices.tolist())
+    # The global maximum may be at a band edge, where find_peaks has no local
+    # neighbour on both sides. It remains a candidate by definition.
+    candidate_indices.add(int(np.argmax(band_powers)))
+    return _spectral_mode_bands(
+        band_frequencies,
+        band_powers,
+        tuple(sorted(candidate_indices)),
+        criteria,
     )
-    candidates = (
-        (frequencies >= criteria.mode_minimum_frequency_hz)
-        & (frequencies <= criteria.mode_maximum_frequency_hz)
+
+
+def _spectral_mode_bands(
+    frequencies,
+    powers,
+    candidate_indices: Sequence[int],
+    criteria: DampingCriteria,
+) -> tuple[tuple[float, float, float], ...]:
+    """Bound each candidate by the nearest spectral valleys around it.
+
+    The valleys define the candidate's own spectral basin. Only when no valley
+    exists on one side is the accepted electromechanical band boundary used.
+    """
+    from scipy import signal
+
+    valley_indices, _ = signal.find_peaks(-powers)
+    bands = []
+    for index in candidate_indices:
+        left_valleys = valley_indices[valley_indices < index]
+        right_valleys = valley_indices[valley_indices > index]
+        lower = (
+            float(frequencies[left_valleys[-1]])
+            if len(left_valleys)
+            else criteria.mode_minimum_frequency_hz
+        )
+        upper = (
+            float(frequencies[right_valleys[0]])
+            if len(right_valleys)
+            else criteria.mode_maximum_frequency_hz
+        )
+        frequency = float(frequencies[index])
+        if lower < frequency < upper:
+            bands.append((frequency, lower, upper))
+    return tuple(bands)
+
+
+def _measure_mode(
+    samples: Sequence[tuple[float, float]],
+    frequency_hz: float,
+    lower: float,
+    upper: float,
+    criteria: DampingCriteria,
+) -> ElectromechanicalMode:
+    """Measure all consecutive local-extrema pairs of one detected mode."""
+    filtered = isolate_mode(samples, lower, upper)
+    if filtered is None:
+        return ElectromechanicalMode(
+            frequency_hz, lower, upper, "not_measurable", (), None,
+            None, None, None, 0, 0,
+            "The mode could not be isolated from the sampled response.",
+        )
+    maxima, minima = _local_extrema(filtered, frequency_hz)
+    usable = [("maximum", maxima), ("minimum", minima)]
+    usable = [(extremum, points) for extremum, points in usable if len(points) >= 2]
+    if not usable:
+        return ElectromechanicalMode(
+            frequency_hz, lower, upper, "not_measurable", (), None,
+            None, None, None, 0, 0,
+            "Fewer than two local extrema of the same kind are available.",
+        )
+    pairs = tuple(
+        pair
+        for extremum, points in usable
+        for pair in _consecutive_damping_pairs(points, extremum)
     )
-    if not np.any(candidates):
-        return None, None
-    candidate_frequencies = frequencies[candidates]
-    candidate_powers = powers[candidates]
-    if not np.any(candidate_powers > 0.0):
-        return None, None
-    dominant_frequency_hz = float(candidate_frequencies[np.argmax(candidate_powers)])
+    if not pairs:
+        return ElectromechanicalMode(
+            frequency_hz, lower, upper, "not_measurable", (), None,
+            None, None, None, 0, 0,
+            "No consecutive local-extrema pair is available.",
+        )
 
-    half_width_hz = max(
-        criteria.mode_filter_half_width_hz,
-        0.5 / (uniform_time[-1] - uniform_time[0]),
+    peak_extremum, peak_time, peak_amplitude = max(
+        (
+            (extremum, time, amplitude)
+            for extremum, points in usable
+            for time, amplitude, _ in points
+        ),
+        key=lambda item: item[2],
     )
-    lower_frequency_hz = max(0.05, dominant_frequency_hz - half_width_hz)
-    upper_frequency_hz = min(
-        sample_frequency_hz * 0.45,
-        dominant_frequency_hz + half_width_hz,
+    peak_tail_pairs = tuple(
+        pair
+        for pair in pairs
+        if pair.extremum == peak_extremum and pair.first_time_s >= peak_time
     )
-    if lower_frequency_hz >= upper_frequency_hz:
-        return None, None
-    filter_sections = signal.butter(
-        3,
-        (lower_frequency_hz, upper_frequency_hz),
-        btype="bandpass",
-        fs=sample_frequency_hz,
-        output="sos",
+    if not peak_tail_pairs:
+        return ElectromechanicalMode(
+            frequency_hz, lower, upper, "not_measurable", pairs, None,
+            peak_time, peak_amplitude, peak_extremum, 0, 0,
+            "The envelope maximum has no following consecutive pair of the same kind.",
+        )
+
+    terminal_pairs = _terminal_direction_sequence(peak_tail_pairs)
+    terminal_is_growing = terminal_pairs[-1].damping_ratio <= 0.0
+    if terminal_is_growing:
+        selected_pair = min(terminal_pairs, key=lambda pair: pair.damping_ratio)
+        status = "growing"
+    else:
+        selected_pair = max(terminal_pairs, key=lambda pair: pair.damping_ratio)
+        status = (
+            "damped"
+            if selected_pair.damping_ratio >= criteria.minimum_damping_ratio
+            else "damped_under"
+        )
+    return ElectromechanicalMode(
+        frequency_hz, lower, upper, status, pairs, selected_pair,
+        peak_time, peak_amplitude, peak_extremum, len(peak_tail_pairs),
+        len(terminal_pairs),
     )
-    try:
-        filtered_response = signal.sosfiltfilt(filter_sections, uniform_response)
-    except ValueError:
-        return None, None
-    return dominant_frequency_hz, list(zip(uniform_time.tolist(), filtered_response.tolist()))
 
 
-def _same_sign_extrema(
-    response: Sequence[tuple[float, float]],
-    amplitude_floor: float,
-    *,
-    minimum_peak_distance_s: float,
-) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Return distinct positive peaks and negative valleys of one filtered mode."""
-    from scipy.signal import find_peaks
-    import numpy as np
+def _terminal_direction_sequence(
+    pairs: Sequence[DampingPair],
+) -> tuple[DampingPair, ...]:
+    """Return the uninterrupted terminal chain with the final pair's direction.
 
-    time = np.asarray([sample[0] for sample in response], dtype=float)
-    values = np.asarray([sample[1] for sample in response], dtype=float)
-    time_step_s = float(np.median(np.diff(time)))
-    distance = max(1, round(minimum_peak_distance_s / time_step_s))
-    positive_indices, _ = find_peaks(values, height=amplitude_floor, distance=distance)
-    negative_indices, _ = find_peaks(-values, height=amplitude_floor, distance=distance)
-    positive_peaks = [(float(time[index]), float(values[index])) for index in positive_indices]
-    negative_peaks = [(float(time[index]), float(-values[index])) for index in negative_indices]
-    return positive_peaks, negative_peaks
+    A positive damping ratio denotes a decreasing envelope. A zero or negative
+    ratio denotes a non-decreasing envelope. The search stops at the first pair
+    with the opposite direction, so a better earlier pair cannot bypass a local
+    recovery or growth interval.
+    """
+    if not pairs:
+        return ()
+    terminal_is_decreasing = pairs[-1].damping_ratio > 0.0
+    sequence = [pairs[-1]]
+    for pair in reversed(pairs[:-1]):
+        pair_is_decreasing = pair.damping_ratio > 0.0
+        if pair_is_decreasing != terminal_is_decreasing:
+            break
+        sequence.append(pair)
+    return tuple(reversed(sequence))
 
 
-def _damping_pairs(
-    peaks: Sequence[tuple[float, float]],
-    polarity: str,
-    minimum_period_s: float,
-    maximum_period_s: float,
-) -> list[DampingPair]:
-    """Calculate logarithmic decrement only for target-band same-sign pairs."""
+def _consecutive_damping_pairs(
+    extrema: Sequence[tuple[float, float, float]],
+    extremum: str,
+) -> tuple[DampingPair, ...]:
+    """Calculate logarithmic decrement from consecutive raw local extrema."""
     pairs = []
-    for (first_time_s, first_amplitude), (second_time_s, second_amplitude) in zip(peaks, peaks[1:]):
-        period_s = second_time_s - first_time_s
-        if not minimum_period_s <= period_s <= maximum_period_s:
+    for (
+        (first_time, first_amplitude, first_value),
+        (second_time, second_amplitude, second_value),
+    ) in zip(extrema, extrema[1:]):
+        period_s = second_time - first_time
+        if period_s <= 0.0 or first_amplitude <= 0.0 or second_amplitude <= 0.0:
             continue
         decrement = log(first_amplitude / second_amplitude)
         damping_ratio = decrement / sqrt((2.0 * pi) ** 2 + decrement**2)
-        pairs.append(
-            DampingPair(
-                polarity=polarity,
-                first_time_s=first_time_s,
-                second_time_s=second_time_s,
-                first_amplitude=first_amplitude,
-                second_amplitude=second_amplitude,
-                period_s=period_s,
-                damping_ratio=damping_ratio,
-            )
-        )
-    return pairs
+        pairs.append(DampingPair(
+            extremum=extremum,
+            first_time_s=first_time,
+            second_time_s=second_time,
+            first_amplitude=first_amplitude,
+            second_amplitude=second_amplitude,
+            period_s=period_s,
+            damping_ratio=damping_ratio,
+            first_value=first_value,
+            second_value=second_value,
+        ))
+    return tuple(pairs)
 
 
-def _initial_response_polarity(
-    samples: Sequence[tuple[float, float]],
-    amplitude_floor: float,
-) -> str | None:
-    """Return the first meaningful deviation polarity from final transfer power."""
-    for _, response in samples:
-        if abs(response) >= amplitude_floor:
-            return "positive" if response > 0.0 else "negative"
-    return None
+def isolate_mode(samples: Sequence[tuple[float, float]], lower_frequency_hz: float, upper_frequency_hz: float) -> list[tuple[float, float]] | None:
+    """Band-pass a single spectrum-detected mode of the deviation signal."""
+    import numpy as np
+    from scipy import signal
 
-
-def _select_initial_polarity_pair(
-    pairs: Sequence[DampingPair],
-    initial_polarity: str | None,
-) -> DampingPair | None:
-    """Use the first valid pair matching the initial response direction only."""
-    matching_pairs = [
-        pair for pair in pairs if pair.polarity == initial_polarity
-    ]
-    if not matching_pairs:
+    if lower_frequency_hz >= upper_frequency_hz:
         return None
-    return min(matching_pairs, key=lambda pair: pair.first_time_s)
+    time = np.asarray([sample[0] for sample in samples], dtype=float)
+    response = np.asarray([sample[1] for sample in samples], dtype=float)
+    time_step = float(np.median(np.diff(time)))
+    if time_step <= 0.0:
+        return None
+    sample_frequency = 1.0 / time_step
+    uniform_time = np.arange(time[0], time[-1] + time_step / 2.0, time_step)
+    uniform_response = np.interp(uniform_time, time, response)
+    sections = signal.butter(3, (lower_frequency_hz, upper_frequency_hz), btype="bandpass", fs=sample_frequency, output="sos")
+    try:
+        response_filtered = signal.sosfiltfilt(sections, uniform_response)
+    except ValueError:
+        return None
+    return list(zip(uniform_time.tolist(), response_filtered.tolist()))
 
 
-def _has_confirmed_growth(
-    pairs: Sequence[DampingPair],
-    selected_pair: DampingPair,
-    criteria: DampingCriteria,
-) -> bool:
-    """Confirm growth using consecutive same-sign extrema, not one peak pair."""
-    polarity_pairs = sorted(
-        (pair for pair in pairs if pair.polarity == selected_pair.polarity),
-        key=lambda pair: pair.first_time_s,
-    )
-    selected_index = polarity_pairs.index(selected_pair)
-    consecutive_amplitudes = [selected_pair.first_amplitude, selected_pair.second_amplitude]
-    previous_pair = selected_pair
-    for pair in polarity_pairs[selected_index + 1 :]:
-        if abs(pair.first_time_s - previous_pair.second_time_s) > 1e-9:
-            break
-        consecutive_amplitudes.append(pair.second_amplitude)
-        previous_pair = pair
-        if len(consecutive_amplitudes) >= criteria.growth_confirmation_peak_count:
-            break
-    if len(consecutive_amplitudes) < criteria.growth_confirmation_peak_count:
-        return False
-    return all(
-        later >= earlier * criteria.growth_confirmation_amplitude_ratio
-        for earlier, later in zip(consecutive_amplitudes, consecutive_amplitudes[1:])
-    )
+def _local_extrema(
+    response: Sequence[tuple[float, float]],
+    frequency_hz: float,
+) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+    """Return all local maxima and minima of an isolated EM response.
+
+    Each point retains its raw signed value for plotting and its absolute
+    amplitude relative to ``P_final`` for the logarithmic decrement.  A zero
+    crossing is therefore part of the measured response; it never excludes or
+    splits an extrema sequence.
+    """
+    import numpy as np
+    from scipy.signal import find_peaks
+
+    time = np.asarray([sample[0] for sample in response], dtype=float)
+    values = np.asarray([sample[1] for sample in response], dtype=float)
+    time_step = float(np.median(np.diff(time)))
+    distance = max(1, round((0.5 / frequency_hz) / time_step))
+    maximum_indices, _ = find_peaks(values, distance=distance)
+    minimum_indices, _ = find_peaks(-values, distance=distance)
+    maxima = [
+        (float(time[index]), float(abs(values[index])), float(values[index]))
+        for index in maximum_indices
+    ]
+    minima = [
+        (float(time[index]), float(abs(values[index])), float(values[index]))
+        for index in minimum_indices
+    ]
+    return maxima, minima
