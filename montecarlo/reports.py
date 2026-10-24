@@ -3,17 +3,24 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from analyzer import SignalStudyAnalysis, StudyAnalysis
-from scenario import ContingencyScenario, EvaluationProfile
-from transfer_analysis import TransferStudyAnalysis
+from montecarlo.batch_analysis import (
+    ContingencyDynamicStabilityAnalysis,
+    SignalStudyAnalysis,
+    StudyAnalysis,
+)
+from stability.scenario import ContingencyScenario, EvaluationProfile
+from stability.power_transfer import HighFrequencyStudyAnalysis, TransferStudyAnalysis
 
 
 @dataclass(frozen=True)
 class TransferDampingRunSummary:
-    """One run's consolidated active-transfer damping conclusion."""
+    """One run's consolidated active-power transfer modal-damping conclusion."""
 
     status: str
     lowest_damping_percent: float | None
+    lowest_transfer_name: str | None
+    dominant_damping_percent: float | None
+    dominant_transfer_name: str | None
 
 
 @dataclass(frozen=True)
@@ -22,6 +29,8 @@ class AnalysisReport:
 
     study_analysis: StudyAnalysis
     transfer_analysis: TransferStudyAnalysis | None = None
+    high_frequency_analysis: HighFrequencyStudyAnalysis | None = None
+    dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
     scenario: ContingencyScenario | None = None
     profile: EvaluationProfile | None = None
 
@@ -39,9 +48,11 @@ class AnalysisReport:
         if self.scenario is not None:
             scenario_sheet = workbook.create_sheet("Scenario")
         if self.transfer_analysis is not None:
-            transfer_assessments_sheet = workbook.create_sheet("Transfer Assessments")
-            transfer_modes_sheet = workbook.create_sheet("Transfer Modes")
-            damping_pairs_sheet = workbook.create_sheet("Transfer Damping Pairs")
+            transfer_assessments_sheet = workbook.create_sheet("Active-Power Transfer Assessments")
+            transfer_modes_sheet = workbook.create_sheet("Electromechanical Modes")
+            damping_pairs_sheet = workbook.create_sheet("Active-Power Transfer Damping Pairs")
+        if self.high_frequency_analysis is not None:
+            high_frequency_sheet = workbook.create_sheet("High-Frequency Components")
 
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
@@ -53,6 +64,8 @@ class AnalysisReport:
             self._write_transfer_assessments(transfer_assessments_sheet)
             self._write_transfer_modes(transfer_modes_sheet)
             self._write_transfer_damping_pairs(damping_pairs_sheet)
+        if self.high_frequency_analysis is not None:
+            self._write_high_frequency_components(high_frequency_sheet)
         workbook.save(output_path)
         workbook.close()
         return output_path
@@ -75,48 +88,129 @@ class AnalysisReport:
 
     def _write_summary(self, sheet) -> None:
         """Write a compact run index; detailed records live in the data sheets."""
-        sheet.append(("Run", "Voltage Stability", "Transfer Damping", "Lowest Transfer Damping [%]"))
+        sheet.append((
+            "Run",
+            "Contingency Dynamic Stability",
+            "Dynamic Stability Reason",
+            "Voltage Stability",
+            "Active-Power Transfer Modal Damping",
+            "Worst Dominant EM Damping [%]",
+            "Dominant EM Transfer",
+            "Lowest EM Mode Damping [%]",
+            "Lowest EM Mode Transfer",
+            "High-Frequency Components",
+        ))
         for run_id in self.study_analysis.run_ids:
             damping = self._transfer_damping_summary_for_run(run_id)
+            dynamic_stability = (
+                self.dynamic_stability_analysis.assessment_for(run_id)
+                if self.dynamic_stability_analysis is not None
+                else None
+            )
+            high_frequency_count = self._high_frequency_component_count(run_id)
             sheet.append((
                 self._run_name(run_id),
+                dynamic_stability.status if dynamic_stability is not None else "Not evaluated",
+                dynamic_stability.reason if dynamic_stability is not None else None,
                 self.study_analysis.status_for_run(run_id),
                 damping.status,
+                damping.dominant_damping_percent,
+                damping.dominant_transfer_name,
                 damping.lowest_damping_percent,
+                damping.lowest_transfer_name,
+                f"Detected ({high_frequency_count})" if high_frequency_count else "None detected",
             ))
         self._format_sheet(sheet)
 
     def _write_transfer_assessments(self, sheet) -> None:
         """Write one database-style assessment row per run and transfer."""
         sheet.append((
-            "Run", "Transfer", "Pre-fault P", "Final P", "Assessment",
-            "Limiting Candidate [Hz]", "Limiting Damping [%]", "Note",
+            "Run", "Active-Power Transfer", "Pre-fault P", "Final P", "Assessment",
+            "Dominant EM Mode [Hz]", "Dominant EM Damping [%]",
+            "Lowest EM Mode [Hz]", "Lowest EM Mode Damping [%]",
+            "High-Frequency Components [Hz]", "Note",
         ))
         for item in self.transfer_analysis.assessments:
             mode = item.critical_mode
+            dominant_mode = item.dominant_mode
+            high_frequency = self._high_frequency_assessment(
+                item.run_id,
+                item.transfer_name,
+            )
             sheet.append((
                 self._run_name(item.run_id), item.transfer_name,
                 item.pre_fault_power, item.final_power, item.classification,
+                dominant_mode.frequency_hz if dominant_mode else None,
+                (
+                    dominant_mode.damping_ratio * 100
+                    if dominant_mode and dominant_mode.damping_ratio is not None
+                    else None
+                ),
                 mode.frequency_hz if mode else None,
                 mode.damping_ratio * 100 if mode and mode.damping_ratio is not None else None,
+                self._component_frequency_list(high_frequency),
                 item.warning or item.comment,
             ))
         self._format_transfer_sheet(sheet)
 
+    def _write_high_frequency_components(self, sheet) -> None:
+        """Write observation-only spectral components outside the EM band."""
+        sheet.append((
+            "Run", "Transfer", "Component", "Frequency [Hz]",
+            "Lower Band [Hz]", "Upper Band [Hz]", "Spectral Power", "Status", "Note",
+        ))
+        for assessment in self.high_frequency_analysis.assessments:
+            if assessment.components:
+                for index, component in enumerate(assessment.components, start=1):
+                    sheet.append((
+                        self._run_name(assessment.run_id),
+                        assessment.transfer_name,
+                        index,
+                        component.frequency_hz,
+                        component.lower_band_hz,
+                        component.upper_band_hz,
+                        component.spectral_power,
+                        "Detected",
+                        None,
+                    ))
+            else:
+                sheet.append((
+                    self._run_name(assessment.run_id),
+                    assessment.transfer_name,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "None detected",
+                    assessment.note,
+                ))
+        self._format_transfer_sheet(sheet)
+
     def _write_transfer_modes(self, sheet) -> None:
-        """Write one database-style row per spectrum candidate."""
+        """Write one database-style row per electromechanical mode."""
         sheet.append((
             "Run", "Transfer", "Candidate", "Frequency [Hz]", "Lower Band [Hz]", "Upper Band [Hz]",
-            "Assessment", "Selected Damping [%]", "Selected Extremum",
+            "Spectral Power", "Dominant", "Assessment", "Terminal Direction",
+            "Terminal Damping [%]", "Selected Damping [%]", "Selected Extremum",
             "Envelope Peak Time [s]", "Envelope Peak Amplitude", "Envelope Peak Extremum",
             "Tail Pairs", "Terminal Sequence Pairs", "Consecutive Pairs", "Note",
         ))
         for item in self.transfer_analysis.assessments:
+            dominant_mode = item.dominant_mode
             for index, mode in enumerate(item.modes, start=1):
                 sheet.append((
                     self._run_name(item.run_id), item.transfer_name, index, mode.frequency_hz,
                     mode.lower_band_hz, mode.upper_band_hz,
+                    mode.spectral_power,
+                    mode is dominant_mode,
                     mode.classification,
+                    mode.terminal_direction,
+                    (
+                        mode.terminal_pair.damping_ratio * 100
+                        if mode.terminal_pair is not None
+                        else None
+                    ),
                     mode.damping_ratio * 100 if mode.damping_ratio is not None else None,
                     mode.selected_extremum,
                     mode.envelope_peak_time_s, mode.envelope_peak_amplitude,
@@ -149,25 +243,74 @@ class AnalysisReport:
         self._format_transfer_sheet(sheet)
 
     def _transfer_damping_summary_for_run(self, run_id: int) -> TransferDampingRunSummary:
-        """Return the limiting transfer-damping state without verbose findings."""
+        """Return the limiting active-power transfer modal-damping state."""
         if self.transfer_analysis is None:
-            return TransferDampingRunSummary("Not measurable", None)
+            return TransferDampingRunSummary("Not measurable", None, None, None, None)
         assessments = [
             item for item in self.transfer_analysis.assessments
             if item.run_id == run_id and item.status not in {"opened", "inactive_pre_fault"}
         ]
         damping = [item.damping_ratio for item in assessments if item.damping_ratio is not None]
         if not assessments:
-            return TransferDampingRunSummary("Not applicable", None)
-        if any(item.status == "growing" for item in assessments):
-            status = "Growing"
-        elif any(item.status == "damped_under" for item in assessments):
-            status = "Damped under"
-        elif damping:
-            status = "Damped"
-        else:
-            status = "Not measurable"
-        return TransferDampingRunSummary(status, min(damping) * 100 if damping else None)
+            return TransferDampingRunSummary("Not applicable", None, None, None, None)
+        status = self.transfer_analysis.modal_damping_status_for_run(run_id)
+        lowest_assessment = min(
+            (item for item in assessments if item.damping_ratio is not None),
+            key=lambda item: item.damping_ratio,
+            default=None,
+        )
+        dominant_assessment = min(
+            (
+                item
+                for item in assessments
+                if item.dominant_damping_ratio is not None
+            ),
+            key=lambda item: item.dominant_damping_ratio,
+            default=None,
+        )
+        return TransferDampingRunSummary(
+            status=status,
+            lowest_damping_percent=(
+                lowest_assessment.damping_ratio * 100
+                if lowest_assessment is not None
+                else None
+            ),
+            lowest_transfer_name=(
+                lowest_assessment.transfer_name if lowest_assessment is not None else None
+            ),
+            dominant_damping_percent=(
+                dominant_assessment.dominant_damping_ratio * 100
+                if dominant_assessment is not None
+                else None
+            ),
+            dominant_transfer_name=(
+                dominant_assessment.transfer_name if dominant_assessment is not None else None
+            ),
+        )
+
+
+    def _high_frequency_assessment(self, run_id: int, transfer_name: str):
+        if self.high_frequency_analysis is None:
+            return None
+        return self.high_frequency_analysis.assessment_for(run_id, transfer_name)
+
+    def _high_frequency_component_count(self, run_id: int) -> int:
+        if self.high_frequency_analysis is None:
+            return 0
+        return sum(
+            len(assessment.components)
+            for assessment in self.high_frequency_analysis.assessments
+            if assessment.run_id == run_id
+        )
+
+    @staticmethod
+    def _component_frequency_list(assessment) -> str | None:
+        if assessment is None or not assessment.components:
+            return None
+        return "; ".join(
+            f"{component.frequency_hz:.2f}"
+            for component in assessment.components
+        )
 
     def _write_initialization(self, sheet) -> None:
         sheet.append(
@@ -307,47 +450,100 @@ class AnalysisReport:
             rows.extend(
                 (
                     (
-                        "Transfer damping",
+                        "Active-Power Transfer Modal Damping",
                         "Electromechanical response band [Hz]",
                         f"{transfer_criteria.mode_minimum_frequency_hz:.1f} to "
                         f"{transfer_criteria.mode_maximum_frequency_hz:.1f}",
                     ),
                     (
-                        "Transfer damping",
+                        "Active-Power Transfer Modal Damping",
                         "Post-clearance guard time [s]",
                         transfer_criteria.post_clearance_guard_time_s,
                     ),
                     (
-                        "Transfer damping",
+                        "Active-Power Transfer Modal Damping",
                         "Analysis start time [s]",
                         transfer_criteria.analysis_start_time_s,
                     ),
                     (
-                        "Transfer damping",
+                        "Active-Power Transfer Modal Damping",
                         "Mode detection",
                         "Every local spectrum maximum in the response band; the global maximum is included at a band edge.",
                     ),
                     (
-                        "Transfer damping",
+                        "Active-Power Transfer Modal Damping",
                         "Mode bands",
                         "Each candidate is bounded by its nearest spectral valleys; outer candidates use the response-band limits when a valley is unavailable.",
                     ),
-                    ("Transfer damping", "Reference", "P_final is the median transfer power in the final window."),
-                    ("Transfer damping", "Measured signal", "P(t) - P_final; each spectral mode is evaluated independently."),
-                    ("Transfer damping", "Damping pairs", "Consecutive local maxima or consecutive local minima of the isolated EM signal, following the NT logarithmic-decrement method."),
-                    ("Transfer damping", "Extremum amplitude", "Each local extremum keeps its signed signal value and uses its absolute distance from P_final for the logarithmic decrement. Zero crossings are retained."),
-                    ("Transfer damping", "Damping phase", "Contains consecutive pairs of the same local-extremum kind after the maximum observed EM amplitude."),
-                    ("Transfer damping", "Terminal sequence", "Starts at the final pair and extends backwards only while its envelope direction is unchanged."),
-                    ("Transfer damping", "Selected pair", "Decreasing terminal sequence: largest positive xi. Non-decreasing terminal sequence: most negative xi."),
-                    ("Transfer damping", "Direction boundary", "An earlier pair is not selected across an intervening pair with the opposite envelope direction."),
-                    ("Transfer damping", "Available evidence", "One valid pair in the terminal sequence is sufficient; both tail and terminal-sequence counts are reported."),
-                    ("Transfer damping", "Damped", f"All measurable modes have xi >= {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
-                    ("Transfer damping", "Damped under", f"At least one measurable mode has 0% < xi < {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
-                    ("Transfer damping", "Growing", "At least one measurable mode ends with a non-decreasing terminal sequence (xi <= 0%)."),
-                    ("Transfer damping", "Not measurable", "No detected mode has a valid consecutive local-extremum pair after its envelope maximum."),
-                    ("Transfer damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
+                    ("Active-Power Transfer Modal Damping", "Reference", "P_final is the median transfer power in the final window."),
+                    ("Active-Power Transfer Modal Damping", "Measured signal", "P(t) - P_final; each spectral mode is evaluated independently."),
+                    ("Active-Power Transfer Modal Damping", "Dominant EM mode", "The detected EM mode with the greatest spectral power."),
+                    ("Active-Power Transfer Modal Damping", "Lowest EM mode", "The detected EM mode with the smallest selected damping ratio."),
+                    ("Active-Power Transfer Modal Damping", "Damping pairs", "Consecutive local maxima or consecutive local minima of the isolated EM signal, following the NT logarithmic-decrement method."),
+                    ("Active-Power Transfer Modal Damping", "Extremum amplitude", "Each local extremum keeps its signed signal value and uses its absolute distance from P_final for the logarithmic decrement. Zero crossings are retained."),
+                    ("Active-Power Transfer Modal Damping", "Damping phase", "Contains consecutive pairs of the same local-extremum kind after the maximum observed EM amplitude."),
+                    ("Active-Power Transfer Modal Damping", "Terminal sequence", "Starts at the final pair and extends backwards only while its envelope direction is unchanged."),
+                    ("Active-Power Transfer Modal Damping", "Selected damping", "Decreasing terminal sequence: largest positive xi. Non-decreasing terminal sequence: most negative xi."),
+                    ("Active-Power Transfer Modal Damping", "Direction boundary", "An earlier pair is not selected across an intervening pair with the opposite envelope direction."),
+                    ("Active-Power Transfer Modal Damping", "Available evidence", "One valid pair in the terminal sequence is sufficient; both tail and terminal-sequence counts are reported."),
+                    ("Active-Power Transfer Modal Damping", "Damped", f"All measurable modes have xi >= {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
+                    ("Active-Power Transfer Modal Damping", "Damped under", f"At least one measurable mode has 0% < xi < {transfer_criteria.minimum_damping_ratio * 100:.0f}%"),
+                    ("Active-Power Transfer Modal Damping", "Growing", "At least one measurable mode ends with a non-decreasing terminal sequence (xi <= 0%)."),
+                    ("Active-Power Transfer Modal Damping", "Not measurable", "No detected mode has a valid consecutive local-extremum pair after its envelope maximum."),
+                    ("Active-Power Transfer Modal Damping", "Minimum damping ratio [%]", transfer_criteria.minimum_damping_ratio * 100),
                 )
             )
+        if self.high_frequency_analysis and self.high_frequency_analysis.assessments:
+            high_frequency_criteria = self.high_frequency_analysis.assessments[0].criteria
+            rows.extend(
+                (
+                    (
+                        "High-frequency components",
+                        "Observation band [Hz]",
+                        f"{high_frequency_criteria.minimum_frequency_hz:.1f} to "
+                        f"{high_frequency_criteria.maximum_frequency_hz:.1f}",
+                    ),
+                    (
+                        "High-frequency components",
+                        "Measured signal",
+                        "P(t) - P_final; detected independently from EM damping.",
+                    ),
+                    (
+                        "High-frequency components",
+                        "Detection",
+                        "Local spectrum maxima bounded by their nearest spectral valleys.",
+                    ),
+                    (
+                        "High-frequency components",
+                        "Assessment",
+                        "Observation only: no damping ratio or stability classification is assigned.",
+                    ),
+                )
+            )
+        rows.extend(
+            (
+                (
+                    "Contingency Dynamic Stability",
+                    "Scope",
+                    "Combined voltage stability and active-power transfer modal damping for the defined contingency.",
+                ),
+                (
+                    "Contingency Dynamic Stability",
+                    "Stable",
+                    "Voltage stability is Stable and active-power transfer modal damping is Damped.",
+                ),
+                (
+                    "Contingency Dynamic Stability",
+                    "Unstable",
+                    "Either voltage stability is Unstable or active-power transfer modal damping is Growing or Damped under.",
+                ),
+                (
+                    "Contingency Dynamic Stability",
+                    "Not evaluated",
+                    "Either voltage stability or active-power transfer modal damping was not evaluated.",
+                ),
+            )
+        )
         for row in rows:
             sheet.append(row)
 
@@ -357,7 +553,7 @@ class AnalysisReport:
         if not voltage_analysis.run_results:
             if self.profile is not None:
                 return self.profile.initialization_criteria
-            from signal_analysis import InitializationCriteria
+            from stability.voltage import InitializationCriteria
 
             return InitializationCriteria()
         return voltage_analysis.run_results[0].initialization.criteria
@@ -368,7 +564,7 @@ class AnalysisReport:
                 return result.stability.criteria
         if self.profile is not None:
             return self.profile.voltage_criteria
-        from signal_analysis import StabilityCriteria
+        from stability.voltage import StabilityCriteria
 
         return StabilityCriteria()
 

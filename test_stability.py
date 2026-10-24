@@ -2,7 +2,7 @@
 
 import unittest
 
-from signal_analysis import StabilityCriteria, assess_stability
+from stability.voltage import StabilityCriteria, assess_stability
 
 
 class StabilityAssessmentTests(unittest.TestCase):

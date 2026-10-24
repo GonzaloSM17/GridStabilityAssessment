@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import re
 
-from time_series import TimeSeriesDataset
+from data.time_series import TimeSeriesDataset
 
 
 VOLTAGE_RMS = "voltage_rms"

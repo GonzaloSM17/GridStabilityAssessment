@@ -2,13 +2,18 @@
 
 from pathlib import Path
 
-from analyzer import AnalysisPipeline, BusStudyAnalysis, StudyAnalysis
-from assets import Assets
-from context import MonteCarloContext
-from reports import AnalysisReport
-from scenario import ContingencyScenario, EvaluationProfile
-from signals import VOLTAGE_RMS
-from study import MonteCarloStudy
+from montecarlo.batch_analysis import (
+    AnalysisPipeline,
+    BusStudyAnalysis,
+    ContingencyDynamicStabilityAnalysis,
+    StudyAnalysis,
+)
+from data.assets import Assets
+from data.signals import VOLTAGE_RMS
+from montecarlo.context import MonteCarloContext
+from montecarlo.reports import AnalysisReport
+from montecarlo.study import MonteCarloStudy
+from stability.scenario import ContingencyScenario, EvaluationProfile
 
 
 class MonteCarloWorkbench:
@@ -23,6 +28,7 @@ class MonteCarloWorkbench:
     ) -> None:
         self.study: MonteCarloStudy | None = None
         self._pipeline: AnalysisPipeline | None = None
+        self.dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
         self.open_study(context_path, assets_path, scenario, profile)
 
     @property
@@ -127,6 +133,7 @@ class MonteCarloWorkbench:
         study_analysis = StudyAnalysis(bus_analyses)
         controller_analysis = self.pipeline.analyze_controllers()
         transfer_analysis = self.pipeline.analyze_power_transfers()
+        high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
 
         controller_output_directory = self.controller_output_directory()
         self.save_figure(
@@ -149,11 +156,18 @@ class MonteCarloWorkbench:
         for bus_analysis in study_analysis.bus_analyses:
             self._publish_bus_analysis(bus_analysis, controller_analysis)
 
-        self._publish_transfer_analysis(transfer_analysis)
+        self._publish_transfer_analysis(transfer_analysis, high_frequency_analysis)
+
+        self.dynamic_stability_analysis = self.pipeline.analyze_contingency_dynamic_stability(
+            study_analysis,
+            transfer_analysis,
+        )
 
         AnalysisReport(
             study_analysis,
             transfer_analysis,
+            high_frequency_analysis,
+            self.dynamic_stability_analysis,
             scenario=self.pipeline.scenario,
             profile=self.pipeline.profile,
         ).write(
@@ -174,10 +188,12 @@ class MonteCarloWorkbench:
         end_time_s: float | None = None,
         show_figure: bool = True,
     ) -> Path:
-        """Calculate and publish transfer damping figures without bus analysis."""
+        """Calculate and publish active-power transfer modal-damping figures."""
         transfer_analysis = self.pipeline.analyze_power_transfers()
+        high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
         output_paths = self._publish_transfer_analysis(
             transfer_analysis,
+            high_frequency_analysis,
             start_time_s=start_time_s,
             end_time_s=end_time_s,
         )
@@ -190,6 +206,7 @@ class MonteCarloWorkbench:
     def _publish_transfer_analysis(
         self,
         transfer_analysis,
+        high_frequency_analysis,
         *,
         start_time_s: float = 0.9,
         end_time_s: float | None = None,
@@ -213,23 +230,63 @@ class MonteCarloWorkbench:
             figures.extend(
                 (
                     (
-                        "02_damping_by_transfer.png",
-                        self.pipeline.plot_transfer_damping_summary(transfer_analysis),
+                        "02_dominant_mode_damping.png",
+                        self.pipeline.plot_dominant_mode_damping_summary(
+                            transfer_analysis
+                        ),
                     ),
                     (
-                        "03_worst_damping_cases.png",
+                        "03_all_em_mode_damping.png",
+                        self.pipeline.plot_all_em_mode_damping_summary(
+                            transfer_analysis
+                        ),
+                    ),
+                    (
+                        "04_worst_damping_cases.png",
                         self.pipeline.plot_worst_transfer_damping_cases(
                             transfer_analysis
                         ),
                     ),
                     (
-                        "04_worst_damping_em_components.png",
+                        "05_worst_damping_em_components.png",
                         self.pipeline.plot_worst_transfer_electromechanical_cases(
                             transfer_analysis
                         ),
                     ),
+                    (
+                        "06_transfer_mode_decomposition.png",
+                        self.pipeline.plot_worst_transfer_mode_decomposition(
+                            transfer_analysis
+                        ),
+                    ),
+                    (
+                        "07_high_frequency_component_spectra.png",
+                        self.pipeline.plot_high_frequency_component_spectra(
+                            transfer_analysis,
+                            high_frequency_analysis,
+                        ),
+                    ),
+                    (
+                        "08_high_frequency_component_decomposition.png",
+                        self.pipeline.plot_high_frequency_component_decomposition(
+                            transfer_analysis,
+                            high_frequency_analysis,
+                        ),
+                    ),
                 )
             )
+        obsolete_filenames = (
+            "02_damping_by_transfer.png",
+            "03_worst_damping_cases.png",
+            "04_worst_damping_em_components.png",
+            "05_transfer_mode_decomposition.png",
+            "06_high_frequency_component_spectra.png",
+            "07_high_frequency_component_decomposition.png",
+        )
+        for filename in obsolete_filenames:
+            obsolete_path = output_directory / filename
+            if obsolete_path.is_file():
+                obsolete_path.unlink()
         return tuple(
             self.save_figure(figure, output_directory, filename)
             for filename, figure in figures

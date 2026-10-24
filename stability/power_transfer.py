@@ -19,9 +19,29 @@ class DampingCriteria:
     minimum_simulation_end_time_s: float = 5.0
     minimum_pre_fault_power: float = 1.0
     opened_final_power_ratio: float = 0.05
-    mode_minimum_frequency_hz: float = 0.2
+    mode_minimum_frequency_hz: float = 0.1
     mode_maximum_frequency_hz: float = 2.5
     minimum_damping_ratio: float = 0.05
+
+
+@dataclass(frozen=True)
+class HighFrequencyCriteria:
+    """Observation band for spectral content outside the EM damping range."""
+
+    minimum_frequency_hz: float = 2.5
+    maximum_frequency_hz: float = 50.0
+    analysis_start_time_s: float = 2.0
+    final_reference_duration_s: float = 1.0
+
+
+@dataclass(frozen=True)
+class HighFrequencyComponent:
+    """One detected spectral component outside the EM damping band."""
+
+    frequency_hz: float
+    lower_band_hz: float
+    upper_band_hz: float
+    spectral_power: float
 
 
 @dataclass(frozen=True)
@@ -59,6 +79,8 @@ class ElectromechanicalMode:
     tail_pair_count: int
     terminal_sequence_pair_count: int
     message: str | None = None
+    spectral_power: float | None = None
+    terminal_pair: DampingPair | None = None
 
     @property
     def damping_ratio(self) -> float | None:
@@ -67,6 +89,12 @@ class ElectromechanicalMode:
     @property
     def selected_extremum(self) -> str | None:
         return self.selected_pair.extremum if self.selected_pair else None
+
+    @property
+    def terminal_direction(self) -> str | None:
+        if self.terminal_pair is None:
+            return None
+        return "Growing" if self.terminal_pair.damping_ratio <= 0.0 else "Decreasing"
 
     @property
     def classification(self) -> str:
@@ -101,6 +129,17 @@ class TransferRunAssessment:
             if mode.status != "not_measurable" and mode.damping_ratio is not None
         ]
         return min(measurable, key=lambda mode: mode.damping_ratio) if measurable else None
+
+    @property
+    def dominant_mode(self) -> ElectromechanicalMode | None:
+        """Return the observed EM mode with the greatest spectral power."""
+        candidates = [mode for mode in self.modes if mode.spectral_power is not None]
+        return max(candidates, key=lambda mode: mode.spectral_power) if candidates else None
+
+    @property
+    def dominant_damping_ratio(self) -> float | None:
+        mode = self.dominant_mode
+        return mode.damping_ratio if mode else None
 
     @property
     def damping_ratio(self) -> float | None:
@@ -141,6 +180,58 @@ class TransferStudyAnalysis:
     def assessment_for(self, run_id: int, transfer_name: str) -> TransferRunAssessment | None:
         return next((item for item in self.assessments if item.run_id == run_id and item.transfer_name == transfer_name), None)
 
+    def modal_damping_status_for_run(self, run_id: int) -> str:
+        """Return the consolidated active-power transfer modal-damping status."""
+        assessments = [
+            item
+            for item in self.assessments
+            if item.run_id == run_id
+            and item.status not in {"opened", "inactive_pre_fault"}
+        ]
+        if not assessments:
+            return "Not applicable"
+        if any(item.status == "growing" for item in assessments):
+            return "Growing"
+        if any(item.status == "damped_under" for item in assessments):
+            return "Damped under"
+        if any(item.damping_ratio is not None for item in assessments):
+            return "Damped"
+        return "Not measurable"
+
+
+@dataclass(frozen=True)
+class HighFrequencyTransferAssessment:
+    """Observed high-frequency spectral components of one transfer in one run."""
+
+    run_id: int
+    transfer_name: str
+    final_power: float
+    status: str
+    components: tuple[HighFrequencyComponent, ...]
+    criteria: HighFrequencyCriteria
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class HighFrequencyStudyAnalysis:
+    """All high-frequency transfer observations in a Monte Carlo study."""
+
+    assessments: tuple[HighFrequencyTransferAssessment, ...]
+
+    def assessment_for(
+        self,
+        run_id: int,
+        transfer_name: str,
+    ) -> HighFrequencyTransferAssessment | None:
+        return next(
+            (
+                item
+                for item in self.assessments
+                if item.run_id == run_id and item.transfer_name == transfer_name
+            ),
+            None,
+        )
+
 
 def assess_transfer_damping(
     time_values: Sequence[float],
@@ -150,7 +241,7 @@ def assess_transfer_damping(
     transfer_name: str,
     criteria: DampingCriteria | None = None,
 ) -> TransferRunAssessment:
-    """Assess every identifiable 0.2-2.5 Hz mode of one power transfer.
+    """Assess every identifiable 0.1-2.5 Hz mode of one power transfer.
 
     ``P_final`` is retained as the physical post-contingency reference. The
     assessed signal is ``P(t) - P_final``. Modes are discovered in the whole
@@ -159,7 +250,7 @@ def assess_transfer_damping(
     criteria = criteria or DampingCriteria()
     _validate_criteria(criteria)
     if len(time_values) != len(power_values) or len(time_values) < 3:
-        raise ValueError("Transfer damping requires matching time and power samples.")
+        raise ValueError("Active-power transfer modal damping requires matching time and power samples.")
     samples = [(float(time), float(power)) for time, power in zip(time_values, power_values)]
     if any(right[0] <= left[0] for left, right in zip(samples, samples[1:])):
         raise ValueError("Transfer time samples must be strictly increasing.")
@@ -183,8 +274,12 @@ def assess_transfer_damping(
 
     mode_start = max(criteria.analysis_start_time_s, criteria.clearance_time_s + criteria.post_clearance_guard_time_s)
     deviation = [(time, value - final_power) for time, value in samples if time >= mode_start]
-    mode_bands = _detect_mode_bands(deviation, criteria)
-    if not mode_bands:
+    spectral_components = _detect_spectral_components(
+        deviation,
+        criteria.mode_minimum_frequency_hz,
+        criteria.mode_maximum_frequency_hz,
+    )
+    if not spectral_components:
         return TransferRunAssessment(
             status="not_measurable", modes=(),
             warning=("No identifiable electromechanical mode was found within "
@@ -192,8 +287,15 @@ def assess_transfer_damping(
             **common,
         )
     modes = tuple(
-        _measure_mode(deviation, frequency, lower, upper, criteria)
-        for frequency, lower, upper in mode_bands
+        _measure_mode(
+            deviation,
+            component.frequency_hz,
+            component.lower_band_hz,
+            component.upper_band_hz,
+            criteria,
+            spectral_power=component.spectral_power,
+        )
+        for component in spectral_components
     )
     measurable = [
         mode
@@ -215,6 +317,53 @@ def assess_transfer_damping(
     return TransferRunAssessment(status=status, modes=modes, warning=warning, **common)
 
 
+def assess_high_frequency_components(
+    time_values: Sequence[float],
+    power_values: Sequence[float],
+    *,
+    run_id: int,
+    transfer_name: str,
+    criteria: HighFrequencyCriteria | None = None,
+) -> HighFrequencyTransferAssessment:
+    """Detect transfer spectral components in the observation-only high-frequency band.
+
+    This function intentionally does not calculate damping or a stability state.
+    It records the spectral components independently from the EM damping study.
+    """
+    criteria = criteria or HighFrequencyCriteria()
+    _validate_high_frequency_criteria(criteria)
+    if len(time_values) != len(power_values) or len(time_values) < 3:
+        raise ValueError("High-frequency detection requires matching time and power samples.")
+    samples = [(float(time), float(power)) for time, power in zip(time_values, power_values)]
+    if any(right[0] <= left[0] for left, right in zip(samples, samples[1:])):
+        raise ValueError("Transfer time samples must be strictly increasing.")
+
+    final_start = samples[-1][0] - criteria.final_reference_duration_s
+    final_values = [value for time, value in samples if time >= final_start]
+    if not final_values:
+        raise ValueError("Transfer signal does not cover the final-reference window.")
+    final_power = median(final_values)
+    deviation = [
+        (time, value - final_power)
+        for time, value in samples
+        if time >= criteria.analysis_start_time_s
+    ]
+    components = _detect_spectral_components(
+        deviation,
+        criteria.minimum_frequency_hz,
+        criteria.maximum_frequency_hz,
+    )
+    return HighFrequencyTransferAssessment(
+        run_id=run_id,
+        transfer_name=transfer_name,
+        final_power=final_power,
+        status="detected" if components else "none_detected",
+        components=components,
+        criteria=criteria,
+        note=None if components else "No spectral component was detected in the observation band.",
+    )
+
+
 def _validate_criteria(criteria: DampingCriteria) -> None:
     if not 0.0 < criteria.mode_minimum_frequency_hz < criteria.mode_maximum_frequency_hz:
         raise ValueError("The electromechanical mode frequency limits are invalid.")
@@ -224,46 +373,108 @@ def _validate_criteria(criteria: DampingCriteria) -> None:
         raise ValueError("Damping analysis must not start before contingency clearance.")
 
 
+def _validate_high_frequency_criteria(criteria: HighFrequencyCriteria) -> None:
+    if not 0.0 < criteria.minimum_frequency_hz < criteria.maximum_frequency_hz:
+        raise ValueError("The high-frequency observation band is invalid.")
+    if criteria.analysis_start_time_s < 0.0:
+        raise ValueError("The high-frequency analysis start time cannot be negative.")
+    if criteria.final_reference_duration_s <= 0.0:
+        raise ValueError("The final-reference duration must be positive.")
+
+
 def _detect_mode_bands(
     samples: Sequence[tuple[float, float]],
     criteria: DampingCriteria,
 ) -> tuple[tuple[float, float, float], ...]:
-    """Return every local spectral maximum with its spectral-basin band.
+    """Return every EM spectral maximum with its spectral-basin band."""
+    return tuple(
+        (component.frequency_hz, component.lower_band_hz, component.upper_band_hz)
+        for component in _detect_spectral_components(
+            samples,
+            criteria.mode_minimum_frequency_hz,
+            criteria.mode_maximum_frequency_hz,
+        )
+    )
 
-    The outer band limits come from the accepted electromechanical range. The
-    nearest spectral valleys delimit each local candidate, so no prominence
-    threshold, maximum count, or fixed filter width is introduced.
-    """
+
+def spectral_power_spectrum(
+    samples: Sequence[tuple[float, float]],
+    minimum_frequency_hz: float,
+    maximum_frequency_hz: float,
+) -> tuple[list[float], list[float]] | None:
+    """Return the detrended periodogram within one explicit observation band."""
     import numpy as np
     from scipy import signal
 
     if len(samples) < 16:
-        return ()
+        return None
     time = np.asarray([sample[0] for sample in samples], dtype=float)
     response = np.asarray([sample[1] for sample in samples], dtype=float)
     time_step = float(np.median(np.diff(time)))
     if time_step <= 0.0:
-        return ()
+        return None
     sample_frequency = 1.0 / time_step
-    if sample_frequency <= 2.5 * criteria.mode_maximum_frequency_hz:
-        return ()
+    if sample_frequency <= 2.5 * maximum_frequency_hz:
+        return None
     uniform_time = np.arange(time[0], time[-1] + time_step / 2.0, time_step)
     uniform_response = np.interp(uniform_time, time, response)
-    frequencies, powers = signal.periodogram(signal.detrend(uniform_response, type="linear"), fs=sample_frequency, window="hann", scaling="spectrum")
-    in_band = (frequencies >= criteria.mode_minimum_frequency_hz) & (frequencies <= criteria.mode_maximum_frequency_hz)
+    frequencies, powers = signal.periodogram(
+        signal.detrend(uniform_response, type="linear"),
+        fs=sample_frequency,
+        window="hann",
+        scaling="spectrum",
+    )
+    in_band = (
+        (frequencies >= minimum_frequency_hz)
+        & (frequencies <= maximum_frequency_hz)
+    )
     band_frequencies, band_powers = frequencies[in_band], powers[in_band]
     if len(band_frequencies) == 0 or not np.any(band_powers > 0.0):
+        return None
+    return band_frequencies.tolist(), band_powers.tolist()
+
+
+def _detect_spectral_components(
+    samples: Sequence[tuple[float, float]],
+    minimum_frequency_hz: float,
+    maximum_frequency_hz: float,
+) -> tuple[HighFrequencyComponent, ...]:
+    """Detect local spectrum maxima and delimit them by their adjacent valleys."""
+    import numpy as np
+    from scipy import signal
+
+    spectrum = spectral_power_spectrum(
+        samples,
+        minimum_frequency_hz,
+        maximum_frequency_hz,
+    )
+    if spectrum is None:
         return ()
-    peak_indices, _ = signal.find_peaks(band_powers)
+    frequencies, powers = spectrum
+    frequencies = np.asarray(frequencies, dtype=float)
+    powers = np.asarray(powers, dtype=float)
+    peak_indices, _ = signal.find_peaks(powers)
     candidate_indices = set(peak_indices.tolist())
-    # The global maximum may be at a band edge, where find_peaks has no local
-    # neighbour on both sides. It remains a candidate by definition.
-    candidate_indices.add(int(np.argmax(band_powers)))
-    return _spectral_mode_bands(
-        band_frequencies,
-        band_powers,
+    candidate_indices.add(int(np.argmax(powers)))
+    bands = _spectral_component_bands(
+        frequencies,
+        powers,
         tuple(sorted(candidate_indices)),
-        criteria,
+        minimum_frequency_hz,
+        maximum_frequency_hz,
+    )
+    power_by_frequency = {
+        float(frequency): float(power)
+        for frequency, power in zip(frequencies, powers)
+    }
+    return tuple(
+        HighFrequencyComponent(
+            frequency_hz=frequency,
+            lower_band_hz=lower,
+            upper_band_hz=upper,
+            spectral_power=power_by_frequency[frequency],
+        )
+        for frequency, lower, upper in bands
     )
 
 
@@ -273,13 +484,33 @@ def _spectral_mode_bands(
     candidate_indices: Sequence[int],
     criteria: DampingCriteria,
 ) -> tuple[tuple[float, float, float], ...]:
+    """Bound EM candidates by the nearest spectral valleys around them."""
+    return _spectral_component_bands(
+        frequencies,
+        powers,
+        candidate_indices,
+        criteria.mode_minimum_frequency_hz,
+        criteria.mode_maximum_frequency_hz,
+    )
+
+
+def _spectral_component_bands(
+    frequencies,
+    powers,
+    candidate_indices: Sequence[int],
+    minimum_frequency_hz: float,
+    maximum_frequency_hz: float,
+) -> tuple[tuple[float, float, float], ...]:
     """Bound each candidate by the nearest spectral valleys around it.
 
     The valleys define the candidate's own spectral basin. Only when no valley
-    exists on one side is the accepted electromechanical band boundary used.
+    exists on one side is the explicit observation-band boundary used.
     """
+    import numpy as np
     from scipy import signal
 
+    frequencies = np.asarray(frequencies)
+    powers = np.asarray(powers)
     valley_indices, _ = signal.find_peaks(-powers)
     bands = []
     for index in candidate_indices:
@@ -288,12 +519,12 @@ def _spectral_mode_bands(
         lower = (
             float(frequencies[left_valleys[-1]])
             if len(left_valleys)
-            else criteria.mode_minimum_frequency_hz
+            else minimum_frequency_hz
         )
         upper = (
             float(frequencies[right_valleys[0]])
             if len(right_valleys)
-            else criteria.mode_maximum_frequency_hz
+            else maximum_frequency_hz
         )
         frequency = float(frequencies[index])
         if lower < frequency < upper:
@@ -307,6 +538,8 @@ def _measure_mode(
     lower: float,
     upper: float,
     criteria: DampingCriteria,
+    *,
+    spectral_power: float | None = None,
 ) -> ElectromechanicalMode:
     """Measure all consecutive local-extrema pairs of one detected mode."""
     filtered = isolate_mode(samples, lower, upper)
@@ -315,6 +548,7 @@ def _measure_mode(
             frequency_hz, lower, upper, "not_measurable", (), None,
             None, None, None, 0, 0,
             "The mode could not be isolated from the sampled response.",
+            spectral_power=spectral_power,
         )
     maxima, minima = _local_extrema(filtered, frequency_hz)
     usable = [("maximum", maxima), ("minimum", minima)]
@@ -324,6 +558,7 @@ def _measure_mode(
             frequency_hz, lower, upper, "not_measurable", (), None,
             None, None, None, 0, 0,
             "Fewer than two local extrema of the same kind are available.",
+            spectral_power=spectral_power,
         )
     pairs = tuple(
         pair
@@ -335,6 +570,7 @@ def _measure_mode(
             frequency_hz, lower, upper, "not_measurable", (), None,
             None, None, None, 0, 0,
             "No consecutive local-extrema pair is available.",
+            spectral_power=spectral_power,
         )
 
     peak_extremum, peak_time, peak_amplitude = max(
@@ -355,6 +591,7 @@ def _measure_mode(
             frequency_hz, lower, upper, "not_measurable", pairs, None,
             peak_time, peak_amplitude, peak_extremum, 0, 0,
             "The envelope maximum has no following consecutive pair of the same kind.",
+            spectral_power=spectral_power,
         )
 
     terminal_pairs = _terminal_direction_sequence(peak_tail_pairs)
@@ -373,6 +610,8 @@ def _measure_mode(
         frequency_hz, lower, upper, status, pairs, selected_pair,
         peak_time, peak_amplitude, peak_extremum, len(peak_tail_pairs),
         len(terminal_pairs),
+        spectral_power=spectral_power,
+        terminal_pair=terminal_pairs[-1],
     )
 
 

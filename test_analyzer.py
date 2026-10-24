@@ -2,8 +2,13 @@
 
 import unittest
 
-from analyzer import AnalysisPipeline, SignalStudyAnalysis, _round_up_to_nice_number
-from transfer_analysis import (
+from montecarlo.batch_analysis import (
+    AnalysisPipeline,
+    SignalStudyAnalysis,
+    _response_area_scale,
+    _round_up_to_nice_number,
+)
+from stability.power_transfer import (
     DampingCriteria,
     DampingPair,
     ElectromechanicalMode,
@@ -23,6 +28,12 @@ class NiceNumberTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     _round_up_to_nice_number(value)
+
+    def test_response_area_scale_uses_a_nice_step_from_the_observed_span(self):
+        lower_limit, upper_limit, step = _response_area_scale(
+            {1: 0.0838, 2: 0.1794}
+        )
+        self.assertEqual((lower_limit, upper_limit, step), (0.08, 0.18, 0.02))
 
 
 class NoStabilityAssessmentTests(unittest.TestCase):
@@ -66,6 +77,7 @@ class TransferDampingPlotTests(unittest.TestCase):
             envelope_peak_extremum="maximum",
             tail_pair_count=1,
             terminal_sequence_pair_count=1,
+            spectral_power=1.0,
         )
         assessment = TransferRunAssessment(
             run_id=1,
@@ -77,7 +89,7 @@ class TransferDampingPlotTests(unittest.TestCase):
             modes=(mode,),
             criteria=DampingCriteria(),
         )
-        figure = object.__new__(AnalysisPipeline).plot_transfer_damping_summary(
+        figure = object.__new__(AnalysisPipeline).plot_dominant_mode_damping_summary(
             TransferStudyAnalysis((assessment,))
         )
         try:

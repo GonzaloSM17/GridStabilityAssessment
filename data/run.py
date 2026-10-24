@@ -6,10 +6,10 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 
-from time_series import TimeSeriesDataset
+from data.time_series import TimeSeriesDataset
 
 if TYPE_CHECKING:
-    from assets import Assets
+    from data.assets import Assets
 
 
 RUN_DIRECTORY_PATTERN = re.compile(r"run_(\d{6})$")

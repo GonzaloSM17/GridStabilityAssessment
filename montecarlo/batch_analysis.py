@@ -1,9 +1,9 @@
-"""Analysis pipeline for controller and bus-measurement results."""
+"""Monte Carlo population analysis and figure generation."""
 
 from dataclasses import dataclass
 from math import sqrt
 from math import ceil, floor, log10
-from signal_analysis import (
+from stability.voltage import (
     InitializationAssessment,
     InitializationCriteria,
     StabilityAssessment,
@@ -11,18 +11,26 @@ from signal_analysis import (
     assess_initialization,
     assess_stability,
 )
-from signals import Measurement, VOLTAGE_RMS
-from scenario import (
+from data.signals import Measurement, VOLTAGE_RMS
+from stability.scenario import (
     DEFAULT_CONTINGENCY_SCENARIO,
     ContingencyScenario,
     EvaluationProfile,
 )
-from study import MonteCarloStudy
-from transfer_analysis import (
+from montecarlo.study import MonteCarloStudy
+from stability.dynamic_stability import (
+    DynamicStabilityAssessment,
+    assess_dynamic_stability,
+)
+from stability.power_transfer import (
     DampingCriteria,
+    HighFrequencyCriteria,
+    HighFrequencyStudyAnalysis,
     TransferStudyAnalysis,
+    assess_high_frequency_components,
     assess_transfer_damping,
     isolate_mode,
+    spectral_power_spectrum,
 )
 
 
@@ -69,58 +77,59 @@ def _severity_color_map():
 
     return LinearSegmentedColormap.from_list(
         "voltage_response_severity",
-        ("#009E73", "#E69F00", "#D55E00"),
+        ("#009E73", "#F0B323", "#D73027"),
     )
+
+
+def _response_area_scale(area_by_run_id: dict[int, float]) -> tuple[float, float, float]:
+    """Return rounded response-area limits and a legible study-wide tick step."""
+    areas = tuple(area_by_run_id.values())
+    if not areas:
+        return 0.0, 1.0, 0.2
+
+    minimum_area = min(areas)
+    maximum_area = max(areas)
+    if minimum_area == maximum_area:
+        step = _round_up_to_nice_number(maximum_area / 5.0) if maximum_area else 0.2
+        return minimum_area - step, maximum_area + step, step
+
+    step = _round_up_to_nice_number((maximum_area - minimum_area) / 5.0)
+    lower_limit = floor(minimum_area / step) * step
+    upper_limit = ceil(maximum_area / step) * step
+    return lower_limit, upper_limit, step
 
 
 def _response_area_normalization(area_by_run_id: dict[int, float]):
-    """Normalize response areas from zero to a rounded study-wide maximum."""
+    """Normalize response areas across rounded study limits based on their span."""
     from matplotlib.colors import Normalize
 
-    areas = tuple(area_by_run_id.values())
-    if not areas:
-        return Normalize(vmin=0.0, vmax=1.0)
-    maximum_area = _round_up_to_nice_number(max(areas))
-    return Normalize(vmin=0.0, vmax=maximum_area, clip=True)
+    lower_limit, upper_limit, _ = _response_area_scale(area_by_run_id)
+    return Normalize(vmin=lower_limit, vmax=upper_limit, clip=True)
 
 
 def _response_area_color_scale(area_by_run_id: dict[int, float]):
-    """Return a shared severity scale with percentile-anchored transitions.
+    """Return a continuous severity scale across rounded observed limits."""
+    return _response_area_normalization(area_by_run_id), _severity_color_map()
 
-    The colorbar remains in physical response-area units from zero to the
-    rounded study maximum. The 20th and 80th percentiles anchor the color
-    transition, without leaving a visually unhelpful flat green or red band.
-    """
-    import numpy as np
-    from matplotlib.colors import LinearSegmentedColormap
 
-    normalization = _response_area_normalization(area_by_run_id)
+def _response_area_colorbar_ticks(area_by_run_id: dict[int, float]) -> tuple[float, ...]:
+    """Return every explicit, rounded tick shown on a response-area colorbar."""
+    lower_limit, upper_limit, step = _response_area_scale(area_by_run_id)
+    tick_count = round((upper_limit - lower_limit) / step)
+    return tuple(lower_limit + step * index for index in range(tick_count + 1))
+
+
+def _response_area_colorbar_label(area_by_run_id: dict[int, float]) -> str:
+    """Describe both display limits and the observed values behind one colorbar."""
+    lower_limit, upper_limit, _ = _response_area_scale(area_by_run_id)
     areas = tuple(area_by_run_id.values())
-    if len(areas) < 2 or max(areas) == min(areas):
-        return normalization, _severity_color_map()
-
-    lower_percentile = float(np.quantile(areas, 0.20))
-    median_percentile = float(np.quantile(areas, 0.50))
-    upper_percentile = float(np.quantile(areas, 0.80))
-    lower_position = float(normalization(lower_percentile))
-    median_position = float(normalization(median_percentile))
-    upper_position = float(normalization(upper_percentile))
-    if upper_position <= lower_position:
-        return normalization, _severity_color_map()
-    if not lower_position < median_position < upper_position:
-        median_position = (lower_position + upper_position) / 2.0
-
-    color_map = LinearSegmentedColormap.from_list(
-        "ranked_voltage_response_severity",
-        (
-            (0.0, "#009E73"),
-            (lower_position, "#25A584"),
-            (median_position, "#E6C229"),
-            (upper_position, "#E67E22"),
-            (1.0, "#D73027"),
-        ),
+    observed_range = "no assessed runs"
+    if areas:
+        observed_range = f"{min(areas):.3f}–{max(areas):.3f}"
+    return (
+        "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
+        + f"Scale: {lower_limit:.3f}–{upper_limit:.3f}; observed: {observed_range}"
     )
-    return normalization, color_map
 
 
 def _damping_color_scale(damping_ratios: tuple[float, ...]):
@@ -350,6 +359,16 @@ class StudyAnalysis:
         )
 
 
+@dataclass(frozen=True)
+class ContingencyDynamicStabilityAnalysis:
+    """Combined dynamic-stability assessments for one defined contingency."""
+
+    run_assessments: tuple[DynamicStabilityAssessment, ...]
+
+    def assessment_for(self, run_id: int) -> DynamicStabilityAssessment:
+        return next(item for item in self.run_assessments if item.run_id == run_id)
+
+
 class AnalysisPipeline:
     """Execute reusable analyses for one fully configured Monte Carlo study."""
 
@@ -466,6 +485,61 @@ class AnalysisPipeline:
                 except ValueError:
                     continue
         return TransferStudyAnalysis(tuple(assessments))
+
+    @staticmethod
+    def analyze_contingency_dynamic_stability(
+        study_analysis: StudyAnalysis,
+        transfer_analysis: TransferStudyAnalysis,
+    ) -> ContingencyDynamicStabilityAnalysis:
+        """Combine voltage stability with active-power transfer modal damping."""
+        assessments = []
+        for run_id in study_analysis.run_ids:
+            voltage_status = study_analysis.status_for_run(run_id)
+            modal_damping_status = transfer_analysis.modal_damping_status_for_run(run_id)
+            assessments.append(
+                assess_dynamic_stability(
+                    run_id,
+                    voltage_status,
+                    modal_damping_status,
+                )
+            )
+        return ContingencyDynamicStabilityAnalysis(tuple(assessments))
+
+    def detect_high_frequency_transfer_components(
+        self,
+        criteria: HighFrequencyCriteria | None = None,
+    ) -> HighFrequencyStudyAnalysis:
+        """Observe spectral transfer content above the EM damping band.
+
+        This is deliberately separate from ``analyze_power_transfers``: no
+        damping value or stability classification is calculated here.
+        """
+        criteria = criteria or self.profile.high_frequency_criteria
+        transfers = self.study.power_transfers
+        columns = tuple(transfer.column_name for transfer in transfers)
+        assessments = []
+        for run in self.context.runs:
+            if run.dataset is None:
+                continue
+            try:
+                data = run.dataset.read_series_group(columns)
+            except (KeyError, ValueError):
+                continue
+            time_values = data["time"].to_list()
+            for transfer in transfers:
+                try:
+                    assessments.append(
+                        assess_high_frequency_components(
+                            time_values,
+                            data[transfer.column_name].to_list(),
+                            run_id=run.run_id,
+                            transfer_name=transfer.name,
+                            criteria=criteria,
+                        )
+                    )
+                except ValueError:
+                    continue
+        return HighFrequencyStudyAnalysis(tuple(assessments))
 
     def plot_power_transfer_overview(
         self,
@@ -626,50 +700,84 @@ class AnalysisPipeline:
         )
         return figure
 
-    def plot_transfer_damping_summary(self, analysis: TransferStudyAnalysis):
-        """Plot every evaluated transfer/run damping result against the 5% limit."""
+    def plot_dominant_mode_damping_summary(self, analysis: TransferStudyAnalysis):
+        """Plot the selected damping of the greatest-spectral-power EM mode."""
+        records = [
+            (assessment.transfer_name, assessment.dominant_mode)
+            for assessment in analysis.assessments
+            if assessment.dominant_damping_ratio is not None
+        ]
+        return self._plot_em_mode_damping(
+            analysis,
+            records,
+            "Dominant Electromechanical-Mode Damping",
+        )
+
+    def plot_all_em_mode_damping_summary(self, analysis: TransferStudyAnalysis):
+        """Plot the selected damping of every measurable EM mode."""
+        records = [
+            (assessment.transfer_name, mode)
+            for assessment in analysis.assessments
+            for mode in assessment.modes
+            if mode.damping_ratio is not None
+        ]
+        return self._plot_em_mode_damping(
+            analysis,
+            records,
+            "All Electromechanical-Mode Damping",
+        )
+
+    def _plot_em_mode_damping(
+        self,
+        analysis: TransferStudyAnalysis,
+        records,
+        title: str,
+    ):
+        """Plot selected modal damping with frequency encoded by one color scale."""
         import matplotlib.pyplot as plt
         import numpy as np
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import ScalarMappable
 
         transfer_names = analysis.transfer_names
         if not transfer_names:
-            raise ValueError("No transfer damping assessments are available.")
-        damping_ratios = tuple(
-            assessment.damping_ratio
-            for assessment in analysis.assessments
-            if assessment.damping_ratio is not None
-        )
+            raise ValueError("No active-power transfer modal-damping assessments are available.")
+        damping_ratios = tuple(mode.damping_ratio for _, mode in records)
         if not damping_ratios:
             raise ValueError("No transfer contains identifiable electromechanical modes.")
-        normalization, color_map = _damping_color_scale(damping_ratios)
         evaluated_transfer_names = tuple(
             transfer_name
             for transfer_name in transfer_names
-            if any(
-                item.damping_ratio is not None
-                for item in analysis.assessments_for_transfer(transfer_name)
-            )
+            if any(name == transfer_name for name, _ in records)
         )
         figure, axis = plt.subplots(
             figsize=(12, max(4.2, 0.75 * len(evaluated_transfer_names) + 2.5))
         )
+        reference_criteria = next(
+            assessment.criteria
+            for assessment in analysis.assessments
+            if assessment.modes
+        )
+        frequency_normalization = Normalize(
+            vmin=reference_criteria.mode_minimum_frequency_hz,
+            vmax=reference_criteria.mode_maximum_frequency_hz,
+        )
+        frequency_color_map = plt.get_cmap("viridis")
         labels = []
         for index, transfer_name in enumerate(evaluated_transfer_names):
-            assessments = analysis.assessments_for_transfer(transfer_name)
-            evaluated = [item for item in assessments if item.damping_ratio is not None]
-            opened_count = sum(item.status == "opened" for item in assessments)
+            evaluated = [mode for name, mode in records if name == transfer_name]
             jitter = np.linspace(-0.22, 0.22, len(evaluated)) if evaluated else ()
             axis.scatter(
-                [item.damping_ratio * 100.0 for item in evaluated],
+                [mode.damping_ratio * 100.0 for mode in evaluated],
                 [index + offset for offset in jitter],
-                c=[color_map(normalization(item.damping_ratio)) for item in evaluated],
+                c=[frequency_color_map(frequency_normalization(mode.frequency_hz)) for mode in evaluated],
                 s=20,
                 alpha=0.78,
                 edgecolors="none",
             )
-            labels.append(f"{transfer_name}\n{len(evaluated)} evaluated")
-        axis.axvline(0.0, color="#555555", linestyle="-", linewidth=1.0, label="0% damping")
-        axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2, label="5% limit")
+            labels.append(f"{transfer_name}\n{len(evaluated)} modes")
+        axis.axvline(0.0, color="#555555", linestyle="-", linewidth=1.0)
+        axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2)
         axis.set_yticks(range(len(evaluated_transfer_names)), labels)
         axis.set_xlabel("Damping ratio, xi (%)")
         axis.set_ylabel("500 kV transmission system")
@@ -682,7 +790,30 @@ class AnalysisPipeline:
         )
         axis.set_xlim(lower_bound, upper_bound)
         axis.grid(axis="x", visible=True, alpha=0.3)
-        axis.legend(loc="lower right")
+        axis.text(
+            0.0,
+            0.98,
+            "0%",
+            color="#555555",
+            ha="left",
+            va="top",
+            transform=axis.get_xaxis_transform(),
+        )
+        axis.text(
+            5.0,
+            0.98,
+            "5% limit",
+            color="#D73027",
+            ha="left",
+            va="top",
+            transform=axis.get_xaxis_transform(),
+        )
+        color_bar = figure.colorbar(
+            ScalarMappable(norm=frequency_normalization, cmap=frequency_color_map),
+            ax=axis,
+            pad=0.02,
+        )
+        color_bar.set_label("EM mode frequency (Hz)")
         excluded_transfer_count = len(transfer_names) - len(evaluated_transfer_names)
         excluded_run_count = sum(
             item.status in {
@@ -703,7 +834,7 @@ class AnalysisPipeline:
                 va="bottom",
                 fontsize=8,
             )
-        figure.suptitle("Power Transfer Damping")
+        figure.suptitle(title)
         figure.tight_layout(rect=(0.0, 0.06 if excluded_transfer_count else 0.0, 1.0, 0.95))
         return figure
 
@@ -871,7 +1002,7 @@ class AnalysisPipeline:
             if axis.get_visible():
                 axis.set_xlabel("Time (s)")
         figure.suptitle(
-            "Isolated Electromechanical Components for Worst 500 kV Transfer Damping Cases",
+            "Isolated EM Components for Worst Active-Power Transfer Modal-Damping Cases",
             y=0.985,
         )
         figure.subplots_adjust(
@@ -882,6 +1013,354 @@ class AnalysisPipeline:
             hspace=0.48,
             wspace=0.22,
         )
+        return figure
+
+    def plot_worst_transfer_mode_decomposition(
+        self,
+        analysis: TransferStudyAnalysis,
+    ):
+        """Overlay every detected mode for the same limiting cases shown in figure 04."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
+
+        lowest_assessments = []
+        for transfer_name in analysis.transfer_names:
+            assessed = [
+                item
+                for item in analysis.assessments_for_transfer(transfer_name)
+                if item.critical_mode is not None
+            ]
+            if assessed:
+                lowest_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
+        if not lowest_assessments:
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
+
+        transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
+        run_by_id = {run.run_id: run for run in self.context.runs}
+        columns = 3
+        rows = ceil(len(lowest_assessments) / columns)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.9 * rows), sharex=False)
+        axes = np.asarray(axes).reshape(-1)
+        reference_criteria = lowest_assessments[0].criteria
+        frequency_normalization = Normalize(
+            vmin=reference_criteria.mode_minimum_frequency_hz,
+            vmax=reference_criteria.mode_maximum_frequency_hz,
+        )
+        frequency_color_map = plt.get_cmap("viridis")
+
+        for axis, assessment in zip(axes, lowest_assessments):
+            transfer = transfer_by_name[assessment.transfer_name]
+            run = run_by_id[assessment.run_id]
+            start_time_s = assessment.criteria.analysis_start_time_s
+            end_time_s = run.dataset.maximum_time_s()
+            data = run.dataset.read_series_window(
+                (transfer.column_name,), start_time_s, end_time_s
+            )
+            samples = list(zip(
+                data["time"].to_list(),
+                (data[transfer.column_name] - assessment.final_power).to_list(),
+            ))
+            complete_em = isolate_mode(
+                samples,
+                assessment.criteria.mode_minimum_frequency_hz,
+                assessment.criteria.mode_maximum_frequency_hz,
+            )
+            if complete_em is not None:
+                time, response = zip(*complete_em)
+                axis.plot(
+                    time,
+                    response,
+                    color="#2F2F2F",
+                    linewidth=1.25,
+                    linestyle="--",
+                    alpha=0.8,
+                    zorder=1,
+                )
+
+            for mode in assessment.modes:
+                isolated = isolate_mode(samples, mode.lower_band_hz, mode.upper_band_hz)
+                if isolated is None:
+                    continue
+                time, response = zip(*isolated)
+                color = frequency_color_map(frequency_normalization(mode.frequency_hz))
+                is_limiting_mode = mode is assessment.critical_mode
+                axis.plot(
+                    time,
+                    response,
+                    color=color,
+                    linewidth=1.45 if is_limiting_mode else 0.9,
+                    alpha=0.95 if is_limiting_mode else 0.7,
+                    zorder=2 if is_limiting_mode else 1,
+                )
+
+            axis.axhline(0.0, color="#555555", linewidth=0.75, zorder=0)
+            axis.set_title(
+                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"limiting xi={assessment.damping_ratio * 100:.2f}%",
+                fontsize=8.5,
+                pad=8,
+            )
+            axis.grid(visible=True, alpha=0.3)
+            axis.set_xlim(start_time_s, end_time_s)
+
+        for axis in axes[len(lowest_assessments):]:
+            axis.set_visible(False)
+        for axis in axes[::columns]:
+            if axis.get_visible():
+                axis.set_ylabel("P(t) - P_final")
+        for axis in axes:
+            if axis.get_visible():
+                axis.set_xlabel("Time (s)")
+        figure.suptitle(
+            "Electromechanical-Mode Decomposition for Worst Active-Power Transfer Cases",
+            y=0.985,
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.86,
+            bottom=0.07,
+            top=0.92,
+            hspace=0.48,
+            wspace=0.22,
+        )
+        color_bar = figure.colorbar(
+            ScalarMappable(norm=frequency_normalization, cmap=frequency_color_map),
+            cax=figure.add_axes((0.90, 0.14, 0.018, 0.70)),
+        )
+        color_bar.set_label("EM mode frequency (Hz)")
+        return figure
+
+    def plot_high_frequency_component_spectra(
+        self,
+        transfer_analysis: TransferStudyAnalysis,
+        high_frequency_analysis: HighFrequencyStudyAnalysis,
+    ):
+        """Plot high-frequency spectra for the same limiting transfer cases as figure 04."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        lowest_assessments = []
+        for transfer_name in transfer_analysis.transfer_names:
+            assessed = [
+                item
+                for item in transfer_analysis.assessments_for_transfer(transfer_name)
+                if item.critical_mode is not None
+            ]
+            if assessed:
+                lowest_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
+        if not lowest_assessments:
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
+
+        transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
+        run_by_id = {run.run_id: run for run in self.context.runs}
+        columns = 3
+        rows = ceil(len(lowest_assessments) / columns)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.9 * rows), sharex=True)
+        axes = np.asarray(axes).reshape(-1)
+
+        for axis, damping_assessment in zip(axes, lowest_assessments):
+            observation = high_frequency_analysis.assessment_for(
+                damping_assessment.run_id,
+                damping_assessment.transfer_name,
+            )
+            if observation is None:
+                axis.text(0.5, 0.5, "No high-frequency observation is available.", ha="center", va="center", transform=axis.transAxes)
+                axis.set_visible(True)
+                continue
+            transfer = transfer_by_name[damping_assessment.transfer_name]
+            run = run_by_id[damping_assessment.run_id]
+            start_time_s = observation.criteria.analysis_start_time_s
+            data = run.dataset.read_series_window(
+                (transfer.column_name,),
+                start_time_s,
+                run.dataset.maximum_time_s(),
+            )
+            samples = list(zip(
+                data["time"].to_list(),
+                (data[transfer.column_name] - observation.final_power).to_list(),
+            ))
+            spectrum = spectral_power_spectrum(
+                samples,
+                observation.criteria.minimum_frequency_hz,
+                observation.criteria.maximum_frequency_hz,
+            )
+            if spectrum is None:
+                axis.text(0.5, 0.5, "No observable high-frequency spectrum.", ha="center", va="center", transform=axis.transAxes)
+            else:
+                frequencies, powers = spectrum
+                axis.semilogy(frequencies, powers, color="#4C78A8", linewidth=0.9)
+                if observation.components:
+                    axis.scatter(
+                        [component.frequency_hz for component in observation.components],
+                        [component.spectral_power for component in observation.components],
+                        color="#D73027",
+                        s=14,
+                        zorder=3,
+                    )
+            component_count = len(observation.components)
+            axis.set_title(
+                f"{damping_assessment.transfer_name} | run_{damping_assessment.run_id:05d} | "
+                f"{component_count} components",
+                fontsize=8.5,
+                pad=8,
+            )
+            axis.grid(visible=True, alpha=0.3)
+            axis.set_xlim(
+                observation.criteria.minimum_frequency_hz,
+                observation.criteria.maximum_frequency_hz,
+            )
+        for axis in axes[len(lowest_assessments):]:
+            axis.set_visible(False)
+        for axis in axes[::columns]:
+            if axis.get_visible():
+                axis.set_ylabel("Spectral power")
+        for axis in axes:
+            if axis.get_visible():
+                axis.set_xlabel("Frequency (Hz)")
+        figure.suptitle(
+            "High-Frequency Components for Worst Active-Power Transfer Cases",
+            y=0.985,
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.985,
+            bottom=0.07,
+            top=0.92,
+            hspace=0.48,
+            wspace=0.22,
+        )
+        return figure
+
+    def plot_high_frequency_component_decomposition(
+        self,
+        transfer_analysis: TransferStudyAnalysis,
+        high_frequency_analysis: HighFrequencyStudyAnalysis,
+    ):
+        """Overlay detected high-frequency components without evaluating damping."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
+
+        lowest_assessments = []
+        for transfer_name in transfer_analysis.transfer_names:
+            assessed = [
+                item
+                for item in transfer_analysis.assessments_for_transfer(transfer_name)
+                if item.critical_mode is not None
+            ]
+            if assessed:
+                lowest_assessments.append(min(assessed, key=lambda item: item.damping_ratio))
+        if not lowest_assessments:
+            raise ValueError("No transfer contains identifiable electromechanical modes.")
+
+        transfer_by_name = {transfer.name: transfer for transfer in self.study.power_transfers}
+        run_by_id = {run.run_id: run for run in self.context.runs}
+        columns = 3
+        rows = ceil(len(lowest_assessments) / columns)
+        figure, axes = plt.subplots(rows, columns, figsize=(18, 3.9 * rows), sharex=False)
+        axes = np.asarray(axes).reshape(-1)
+        reference_criteria = next(
+            item.criteria
+            for item in high_frequency_analysis.assessments
+        )
+        frequency_normalization = Normalize(
+            vmin=reference_criteria.minimum_frequency_hz,
+            vmax=reference_criteria.maximum_frequency_hz,
+        )
+        frequency_color_map = plt.get_cmap("plasma")
+
+        for axis, damping_assessment in zip(axes, lowest_assessments):
+            observation = high_frequency_analysis.assessment_for(
+                damping_assessment.run_id,
+                damping_assessment.transfer_name,
+            )
+            if observation is None:
+                axis.text(0.5, 0.5, "No high-frequency observation is available.", ha="center", va="center", transform=axis.transAxes)
+                axis.set_visible(True)
+                continue
+            transfer = transfer_by_name[damping_assessment.transfer_name]
+            run = run_by_id[damping_assessment.run_id]
+            start_time_s = observation.criteria.analysis_start_time_s
+            end_time_s = run.dataset.maximum_time_s()
+            data = run.dataset.read_series_window(
+                (transfer.column_name,), start_time_s, end_time_s
+            )
+            samples = list(zip(
+                data["time"].to_list(),
+                (data[transfer.column_name] - observation.final_power).to_list(),
+            ))
+            full_band = isolate_mode(
+                samples,
+                observation.criteria.minimum_frequency_hz,
+                observation.criteria.maximum_frequency_hz,
+            )
+            if full_band is not None:
+                time, response = zip(*full_band)
+                axis.plot(
+                    time,
+                    response,
+                    color="#2F2F2F",
+                    linestyle="--",
+                    linewidth=1.1,
+                    alpha=0.75,
+                )
+            for component in observation.components:
+                isolated = isolate_mode(
+                    samples,
+                    component.lower_band_hz,
+                    component.upper_band_hz,
+                )
+                if isolated is None:
+                    continue
+                time, response = zip(*isolated)
+                axis.plot(
+                    time,
+                    response,
+                    color=frequency_color_map(
+                        frequency_normalization(component.frequency_hz)
+                    ),
+                    linewidth=0.85,
+                    alpha=0.8,
+                )
+            if not observation.components:
+                axis.text(0.5, 0.5, "No detected high-frequency components.", ha="center", va="center", transform=axis.transAxes)
+            axis.axhline(0.0, color="#555555", linewidth=0.75, zorder=0)
+            axis.set_title(
+                f"{damping_assessment.transfer_name} | run_{damping_assessment.run_id:05d} | "
+                f"{len(observation.components)} components",
+                fontsize=8.5,
+                pad=8,
+            )
+            axis.grid(visible=True, alpha=0.3)
+            axis.set_xlim(start_time_s, end_time_s)
+        for axis in axes[len(lowest_assessments):]:
+            axis.set_visible(False)
+        for axis in axes[::columns]:
+            if axis.get_visible():
+                axis.set_ylabel("P(t) - P_final")
+        for axis in axes:
+            if axis.get_visible():
+                axis.set_xlabel("Time (s)")
+        figure.suptitle(
+            "High-Frequency Component Decomposition for Worst Active-Power Transfer Cases",
+            y=0.985,
+        )
+        figure.subplots_adjust(
+            left=0.06,
+            right=0.86,
+            bottom=0.07,
+            top=0.92,
+            hspace=0.48,
+            wspace=0.22,
+        )
+        color_bar = figure.colorbar(
+            ScalarMappable(norm=frequency_normalization, cmap=frequency_color_map),
+            cax=figure.add_axes((0.90, 0.14, 0.018, 0.70)),
+        )
+        color_bar.set_label("High-frequency component (Hz)")
         return figure
 
     def _transfer_plot_end_time(
@@ -1676,10 +2155,8 @@ class AnalysisPipeline:
             cm.ScalarMappable(norm=normalization, cmap=color_map),
             cax=colorbar_axis,
         )
-        colorbar.set_label(
-            "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
-            + "Low response area  →  High response area"
-        )
+        colorbar.set_ticks(_response_area_colorbar_ticks(area_by_run_id))
+        colorbar.set_label(_response_area_colorbar_label(area_by_run_id))
         return figure
 
     def plot_voltage_contingency_closeup(self, analysis: SignalStudyAnalysis):
@@ -1800,8 +2277,6 @@ class AnalysisPipeline:
             cm.ScalarMappable(norm=normalization, cmap=color_map),
             cax=colorbar_axis,
         )
-        colorbar.set_label(
-            "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
-            + "Low response area  →  High response area"
-        )
+        colorbar.set_ticks(_response_area_colorbar_ticks(area_by_run_id))
+        colorbar.set_label(_response_area_colorbar_label(area_by_run_id))
         return figure

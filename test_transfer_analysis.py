@@ -3,7 +3,7 @@
 from math import exp, pi, sqrt
 import unittest
 
-from transfer_analysis import (
+from stability.power_transfer import (
     DampingCriteria,
     DampingPair,
     _spectral_mode_bands,
@@ -91,9 +91,7 @@ class TransferDampingTests(unittest.TestCase):
         values = []
         for time in self.time:
             values.append(
-                100.0
-                if time < 1.0
-                else 90.0 + 20.0 * __import__("math").cos(2.0 * pi * 12.0 * (time - 1.12))
+                100.0 + 20.0 * __import__("math").cos(2.0 * pi * 12.0 * time)
             )
 
         result = assess_transfer_damping(
@@ -138,7 +136,10 @@ class TransferDampingTests(unittest.TestCase):
             frequencies=(0.2, 0.4, 0.6, 0.8, 1.0, 1.2),
             powers=(1.0, 4.0, 1.0, 3.0, 1.0, 0.5),
             candidate_indices=(1, 3),
-            criteria=DampingCriteria(),
+            criteria=DampingCriteria(
+                mode_minimum_frequency_hz=0.2,
+                mode_maximum_frequency_hz=1.0,
+            ),
         )
 
         self.assertEqual(

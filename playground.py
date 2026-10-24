@@ -1,11 +1,10 @@
 """Manual place for selecting and running one Monte Carlo study analysis."""
 
-from workbench import MonteCarloWorkbench
-from scenario import ContingencyScenario
+from montecarlo.workbench import MonteCarloWorkbench
+from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
     # Set either path to None to select it with a dialog.
-    # context_path = r"Z:\Montecarlo 20-10\20261020_1912_8c8eb7"
     context_path = None
     assets_path = (
         r"C:\Users\gonzalo.sanchez\OneDrive - Coordinador Eléctrico Nacional"

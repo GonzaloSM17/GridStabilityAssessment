@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from run import MonteCarloRun
+from data.run import MonteCarloRun
 
 
 @dataclass

@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from signal_analysis import FrequencyCriteria, InitializationCriteria, StabilityCriteria
-from transfer_analysis import DampingCriteria
+from stability.voltage import FrequencyCriteria, InitializationCriteria, StabilityCriteria
+from stability.power_transfer import DampingCriteria, HighFrequencyCriteria
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,7 @@ class EvaluationProfile:
     voltage_criteria: StabilityCriteria
     frequency_criteria: FrequencyCriteria
     transfer_damping_criteria: DampingCriteria
+    high_frequency_criteria: HighFrequencyCriteria
 
     @classmethod
     def for_scenario(cls, scenario: ContingencyScenario) -> "EvaluationProfile":
@@ -78,8 +79,15 @@ class EvaluationProfile:
                 analysis_start_time_s=(
                     scenario.clearance_time_s + damping_start_after_clearance_s
                 ),
-                mode_minimum_frequency_hz=0.2,
+                mode_minimum_frequency_hz=0.1,
                 mode_maximum_frequency_hz=2.5,
+            ),
+            high_frequency_criteria=HighFrequencyCriteria(
+                minimum_frequency_hz=2.5,
+                maximum_frequency_hz=50.0,
+                analysis_start_time_s=(
+                    scenario.clearance_time_s + damping_start_after_clearance_s
+                ),
             ),
         )
 

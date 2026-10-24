@@ -2,7 +2,7 @@
 
 import unittest
 
-from scenario import ContingencyScenario, EvaluationProfile
+from stability.scenario import ContingencyScenario, EvaluationProfile
 
 
 class EvaluationProfileTests(unittest.TestCase):
