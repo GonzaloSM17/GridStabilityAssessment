@@ -7,13 +7,16 @@ from pathlib import Path
 import re
 
 from data.run import MonteCarloRun
+from data.signals import (
+    bus_north_to_south_order_key,
+    transfer_north_to_south_order_key,
+)
 from stability.angular import (
     AngularCalculation,
     angular_excursion_limit,
     angular_excursion_ticks,
 )
 from stability.scenario import ContingencyScenario
-
 
 SignalSelector = Callable[[str], bool]
 
@@ -70,11 +73,13 @@ GENERAL_FIGURES = (
         title="SM Power",
         plots=(
             GeneralPlotDefinition(
-                "Active Power", "Active power (MW)",
+                "Active Power",
+                "Active power (MW)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/P$"),
             ),
             GeneralPlotDefinition(
-                "Reactive Power", "Reactive power (MVAr)",
+                "Reactive Power",
+                "Reactive power (MVAr)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Q$"),
             ),
         ),
@@ -84,11 +89,13 @@ GENERAL_FIGURES = (
         title="SM Electrical and Mechanical Power",
         plots=(
             GeneralPlotDefinition(
-                "Electrical Power", "Electrical power (pu)",
+                "Electrical Power",
+                "Electrical power (pu)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Pe_"),
             ),
             GeneralPlotDefinition(
-                "Mechanical Power", "Mechanical power (pu)",
+                "Mechanical Power",
+                "Mechanical power (pu)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Control_SG/Pmss$"),
             ),
         ),
@@ -98,7 +105,8 @@ GENERAL_FIGURES = (
         title="SM Terminal Voltage",
         plots=(
             GeneralPlotDefinition(
-                "Terminal Voltage", "Voltage (pu)",
+                "Terminal Voltage",
+                "Voltage (pu)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Control_SG/Vt$"),
                 show_voltage_references=True,
                 y_limits=(0.0, 1.5),
@@ -111,11 +119,13 @@ GENERAL_FIGURES = (
         title="SM Dynamics",
         plots=(
             GeneralPlotDefinition(
-                "Rotor Speed", "Rotor speed (pu)",
+                "Rotor Speed",
+                "Rotor speed (pu)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Omega_"),
             ),
             GeneralPlotDefinition(
-                "Angular Excursion", "Angular excursion, Δδ (deg)",
+                "Angular Excursion",
+                "Angular excursion, Δδ (deg)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Teta_1_"),
                 show_angular_references=True,
                 use_coi_angular_excursions=True,
@@ -127,14 +137,18 @@ GENERAL_FIGURES = (
         title="500 kV Buses",
         plots=(
             GeneralPlotDefinition(
-                "RMS Voltage", "Voltage (pu)",
+                "RMS Voltage",
+                "Voltage (pu)",
                 _matches(r"^(?!PMGD_)[^/]*500_MTR/u_rms$"),
+                show_legend=True,
                 show_voltage_references=True,
                 y_limits=(0.0, 1.5),
             ),
             GeneralPlotDefinition(
-                "Frequency", "Frequency (Hz)",
+                "Frequency",
+                "Frequency (Hz)",
                 _matches(r"^(?!PMGD_)[^/]*500_MTR/Frequency_Meter/f$"),
+                show_legend=True,
                 y_limits=(47.5, 52.5),
             ),
         ),
@@ -144,13 +158,15 @@ GENERAL_FIGURES = (
         title="220 kV Buses",
         plots=(
             GeneralPlotDefinition(
-                "RMS Voltage", "Voltage (pu)",
+                "RMS Voltage",
+                "Voltage (pu)",
                 _matches(r"^(?!PMGD_)[^/]*220_MTR/u_rms$"),
                 show_voltage_references=True,
                 y_limits=(0.0, 1.5),
             ),
             GeneralPlotDefinition(
-                "Frequency", "Frequency (Hz)",
+                "Frequency",
+                "Frequency (Hz)",
                 _matches(r"^(?!PMGD_)[^/]*220_MTR/Frequency_Meter/f$"),
                 y_limits=(47.5, 52.5),
             ),
@@ -160,40 +176,92 @@ GENERAL_FIGURES = (
         filename="07_pv_power.png",
         title="PV Power",
         plots=(
-            GeneralPlotDefinition("Active Power", "Active power (MW)", _power_selector("PFV", "P"), value_scale=1e-6),
-            GeneralPlotDefinition("Reactive Power", "Reactive power (MVAr)", _power_selector("PFV", "Q"), value_scale=1e-6),
+            GeneralPlotDefinition(
+                "Active Power",
+                "Active power (MW)",
+                _power_selector("PFV", "P"),
+                value_scale=1e-6,
+            ),
+            GeneralPlotDefinition(
+                "Reactive Power",
+                "Reactive power (MVAr)",
+                _power_selector("PFV", "Q"),
+                value_scale=1e-6,
+            ),
         ),
     ),
     GeneralFigureDefinition(
         filename="08_wf_power.png",
         title="WF Power",
         plots=(
-            GeneralPlotDefinition("Active Power", "Active power (MW)", _power_selector("PE", "P"), value_scale=1e-6),
-            GeneralPlotDefinition("Reactive Power", "Reactive power (MVAr)", _power_selector("PE", "Q"), value_scale=1e-6),
+            GeneralPlotDefinition(
+                "Active Power",
+                "Active power (MW)",
+                _power_selector("PE", "P"),
+                value_scale=1e-6,
+            ),
+            GeneralPlotDefinition(
+                "Reactive Power",
+                "Reactive power (MVAr)",
+                _power_selector("PE", "Q"),
+                value_scale=1e-6,
+            ),
         ),
     ),
     GeneralFigureDefinition(
         filename="09_bess_power.png",
         title="BESS Power",
         plots=(
-            GeneralPlotDefinition("Active Power", "Active power (MW)", _power_selector("BESS", "P"), value_scale=1e-6),
-            GeneralPlotDefinition("Reactive Power", "Reactive power (MVAr)", _power_selector("BESS", "Q"), value_scale=1e-6),
+            GeneralPlotDefinition(
+                "Active Power",
+                "Active power (MW)",
+                _power_selector("BESS", "P"),
+                value_scale=1e-6,
+            ),
+            GeneralPlotDefinition(
+                "Reactive Power",
+                "Reactive power (MVAr)",
+                _power_selector("BESS", "Q"),
+                value_scale=1e-6,
+            ),
         ),
     ),
     GeneralFigureDefinition(
         filename="10_der_power.png",
         title="DER Power",
         plots=(
-            GeneralPlotDefinition("Active Power", "Active power (MW)", _power_selector("PMGD", "P"), value_scale=1e-6),
-            GeneralPlotDefinition("Reactive Power", "Reactive power (MVAr)", _power_selector("PMGD", "Q"), value_scale=1e-6),
+            GeneralPlotDefinition(
+                "Active Power",
+                "Active power (MW)",
+                _power_selector("PMGD", "P"),
+                value_scale=1e-6,
+            ),
+            GeneralPlotDefinition(
+                "Reactive Power",
+                "Reactive power (MVAr)",
+                _power_selector("PMGD", "Q"),
+                value_scale=1e-6,
+            ),
         ),
     ),
     GeneralFigureDefinition(
         filename="11_statcom_svc_power.png",
         title="STATCOM / SVC Power",
         plots=(
-            GeneralPlotDefinition("Active Power", "Active power (MW)", _power_selector("(?:STATCOM|SVC)", "P"), value_scale=1e-6),
-            GeneralPlotDefinition("Reactive Power", "Reactive power (MVAr)", _power_selector("(?:STATCOM|SVC)", "Q"), value_scale=1e-6),
+            GeneralPlotDefinition(
+                "Active Power",
+                "Active power (MW)",
+                _power_selector("(?:STATCOM|SVC)", "P"),
+                show_legend=True,
+                value_scale=1e-6,
+            ),
+            GeneralPlotDefinition(
+                "Reactive Power",
+                "Reactive power (MVAr)",
+                _power_selector("(?:STATCOM|SVC)", "Q"),
+                show_legend=True,
+                value_scale=1e-6,
+            ),
         ),
     ),
     GeneralFigureDefinition(
@@ -201,7 +269,8 @@ GENERAL_FIGURES = (
         title="EDAC — Alto Jahuel",
         plots=(
             GeneralPlotDefinition(
-                "Load Shedding", "State",
+                "Load Shedding",
+                "State",
                 _matches(r"^AJAHUEL_110_EDAC/LS_"),
                 show_legend=True,
             ),
@@ -213,15 +282,21 @@ GENERAL_FIGURES = (
         title="500 kV Power Transfers",
         plots=(
             GeneralPlotDefinition(
-                "North-Center", "Active power (MW)", _matches(r"^PQ_NC_.*/P$"),
+                "North-Center",
+                "Active power (MW)",
+                _matches(r"^PQ_NC_.*/P$"),
                 show_legend=True,
             ),
             GeneralPlotDefinition(
-                "General", "Active power (MW)", _matches(r"^PQ_(?!NC_|SC_).*/P$"),
+                "General",
+                "Active power (MW)",
+                _matches(r"^PQ_(?!NC_|SC_).*/P$"),
                 show_legend=True,
             ),
             GeneralPlotDefinition(
-                "South-Center", "Active power (MW)", _matches(r"^PQ_SC_.*/P$"),
+                "South-Center",
+                "Active power (MW)",
+                _matches(r"^PQ_SC_.*/P$"),
                 show_legend=True,
             ),
         ),
@@ -260,7 +335,7 @@ class GeneralOverview:
         self.angular_calculation = angular_calculation
 
     def create(self, output_directory: str | Path) -> GeneralOverviewResult:
-        """Save every applicable general-overview figure through the run maximum time."""
+        """Save every applicable general-overview figure through at most 10 s."""
         import matplotlib.pyplot as plt
 
         output_path = Path(output_directory)
@@ -272,7 +347,7 @@ class GeneralOverview:
         dataset = self.run.dataset
         dataset.inspect()
         available_names = tuple(series.name for series in dataset.series)
-        maximum_time_s = dataset.maximum_time_s()
+        maximum_time_s = min(dataset.maximum_time_s(), 10.0)
         figure_paths = []
 
         for definition in GENERAL_FIGURES:
@@ -291,6 +366,27 @@ class GeneralOverview:
             )
             if not matched_plots:
                 continue
+            if definition.filename == "13_500_kv_power_transfers.png":
+                matched_plots = tuple(
+                    (
+                        plot,
+                        tuple(
+                            sorted(
+                                plot_names,
+                                key=transfer_north_to_south_order_key,
+                            )
+                        ),
+                    )
+                    for plot, plot_names in matched_plots
+                )
+            if definition.filename == "05_500_kv_buses.png":
+                matched_plots = tuple(
+                    (
+                        plot,
+                        tuple(sorted(plot_names, key=bus_north_to_south_order_key)),
+                    )
+                    for plot, plot_names in matched_plots
+                )
 
             figure = self._create_figure(definition, matched_plots, maximum_time_s)
             path = output_path / definition.filename
@@ -351,7 +447,11 @@ class GeneralOverview:
                         data[name] * plot.value_scale,
                         linewidth=0.7,
                         alpha=0.8,
-                        label=self._curve_label(name) if plot.show_legend else "_nolegend_",
+                        label=(
+                            self._curve_label(name)
+                            if plot.show_legend
+                            else "_nolegend_"
+                        ),
                     )
             if plot.show_voltage_references:
                 self._draw_voltage_references(axis)
@@ -375,6 +475,7 @@ class GeneralOverview:
                 self._set_readable_y_ticks(axis, plot.show_voltage_references)
             if plot.show_voltage_references:
                 axis.legend(
+                    handles=self._voltage_reference_handles(),
                     loc="lower right",
                     fontsize=8,
                     frameon=True,
@@ -396,11 +497,16 @@ class GeneralOverview:
             if plot.show_legend:
                 handles, labels = axis.get_legend_handles_labels()
                 for handle, label in zip(handles, labels):
+                    if (
+                        definition.filename == "05_500_kv_buses.png"
+                        and label in {"0.70 pu", "0.80 pu", "1.10 pu", "1.20 pu"}
+                    ):
+                        continue
                     if label not in legend_labels:
                         legend_handles.append(handle)
                         legend_labels.append(label)
 
-        for axis in axes[len(matched_plots):]:
+        for axis in axes[len(matched_plots) :]:
             axis.set_visible(False)
         figure.suptitle(
             definition.title,
@@ -409,6 +515,18 @@ class GeneralOverview:
             y=0.955,
         )
         if has_figure_legend and legend_handles:
+            if definition.filename == "13_500_kv_power_transfers.png":
+                ordered_legend = sorted(
+                    zip(legend_handles, legend_labels),
+                    key=lambda item: transfer_north_to_south_order_key(item[1]),
+                )
+                legend_handles, legend_labels = map(list, zip(*ordered_legend))
+            if definition.filename == "05_500_kv_buses.png":
+                ordered_legend = sorted(
+                    zip(legend_handles, legend_labels),
+                    key=lambda item: bus_north_to_south_order_key(item[1]),
+                )
+                legend_handles, legend_labels = map(list, zip(*ordered_legend))
             legend_columns = min(5, len(legend_labels))
             legend_rows = ceil(len(legend_labels) / legend_columns)
             figure.legend(
@@ -417,14 +535,14 @@ class GeneralOverview:
                 loc="lower center",
                 bbox_to_anchor=(0.5, 0.018),
                 ncol=legend_columns,
-                fontsize=8,
+                fontsize=7,
                 frameon=True,
                 fancybox=False,
                 framealpha=0.96,
                 edgecolor="#AEB4BA",
                 facecolor="white",
-                columnspacing=1.3,
-                handlelength=1.8,
+                columnspacing=1.1,
+                handlelength=1.5,
             )
             legend_margin = 0.075 + 0.045 * legend_rows
         else:
@@ -466,6 +584,20 @@ class GeneralOverview:
             )
 
     @staticmethod
+    def _voltage_reference_handles():
+        from matplotlib.lines import Line2D
+
+        return tuple(
+            Line2D((), (), color=color, linestyle="--", linewidth=0.9, label=label)
+            for value, color, label in (
+                (0.70, "#D73027", "0.70 pu"),
+                (0.80, "#E67E22", "0.80 pu"),
+                (1.10, "#4C78A8", "1.10 pu"),
+                (1.20, "#6A3D9A", "1.20 pu"),
+            )
+        )
+
+    @staticmethod
     def _draw_angular_references(axis) -> None:
         for value, label in ((120.0, "+120°"), (-120.0, "−120°")):
             axis.axhline(
@@ -480,8 +612,12 @@ class GeneralOverview:
     @staticmethod
     def _curve_label(name: str) -> str:
         """Return the asset or transfer name without its measured quantity suffix."""
-        source_name = name.split("/", 1)[0]
-        return source_name.removeprefix("PQ_NC_").removeprefix("PQ_SC_").removeprefix("PQ_")
+        source_name = name.split("/", 1)[0].removesuffix("_MTR")
+        return (
+            source_name.removeprefix("PQ_NC_")
+            .removeprefix("PQ_SC_")
+            .removeprefix("PQ_")
+        )
 
     @staticmethod
     def _nice_y_limits(lower: float, upper: float) -> tuple[float, float]:

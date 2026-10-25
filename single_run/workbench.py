@@ -58,7 +58,10 @@ class SingleRunWorkbench:
         """Open an explicit run directory or select one through Tk."""
         if run_path is None:
             run_path = self._choose_run_path()
-        return MonteCarloRun.from_directory(run_path)
+        return MonteCarloRun.from_directory(
+            run_path,
+            allow_non_monte_carlo_name=True,
+        )
 
     def analysis_output_directory(self) -> Path:
         """Return the run-local directory for all focused analysis artefacts."""

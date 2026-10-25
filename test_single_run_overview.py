@@ -1,11 +1,93 @@
 """Focused tests for the single-run general-overview signal definitions."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
+from data.run import MonteCarloRun
+from data.signals import (
+    Bus,
+    PowerTransfer,
+    order_500_kv_buses_north_to_south,
+    order_power_transfers_north_to_south,
+)
 from single_run.general_overview import GENERAL_FIGURES, GeneralOverview
 
 
 class GeneralOverviewDefinitionsTests(unittest.TestCase):
+    def test_500_kv_buses_follow_the_declared_north_to_south_order(self):
+        buses = tuple(
+            Bus(name, name, ())
+            for name in (
+                "CHARRUA_500",
+                "AJAHUEL_500",
+                "POLPAICO_500",
+                "KIMAL_500",
+                "LCHANGOS_500",
+                "NPAZUCAR_500",
+                "CUMBRE_500",
+            )
+        )
+
+        ordered = order_500_kv_buses_north_to_south(buses)
+
+        self.assertEqual(
+            tuple(bus.name for bus in ordered),
+            (
+                "KIMAL_500",
+                "LCHANGOS_500",
+                "CUMBRE_500",
+                "NPAZUCAR_500",
+                "POLPAICO_500",
+                "AJAHUEL_500",
+                "CHARRUA_500",
+            ),
+        )
+
+    def test_power_transfers_follow_the_declared_north_to_south_order(self):
+        transfers = (
+            PowerTransfer("NC_NPAZUCAR_POLPAICO_C1", "PQ_NC_NPAZUCAR_POLPAICO_C1/P"),
+            PowerTransfer("NC_KIMAL_CHANGOS_C1", "PQ_NC_KIMAL_CHANGOS_C1/P"),
+            PowerTransfer("NC_CUMBRE_NCARDONES_C1", "PQ_NC_CUMBRE_NCARDONES_C1/P"),
+            PowerTransfer("NC_CHANGOS_JADRESIC_C1", "PQ_NC_CHANGOS_JADRESIC_C1/P"),
+            PowerTransfer("NC_NCARDONES_NMAITENCILLO_C1", "PQ_NC_NCARDONES_NMAITENCILLO_C1/P"),
+            PowerTransfer("NC_NMAITENCILLO_NPAZUCAR_C1", "PQ_NC_NMAITENCILLO_NPAZUCAR_C1/P"),
+        )
+
+        ordered = order_power_transfers_north_to_south(transfers)
+
+        self.assertEqual(
+            tuple(transfer.name for transfer in ordered),
+            (
+                "NC_KIMAL_CHANGOS_C1",
+                "NC_CHANGOS_JADRESIC_C1",
+                "NC_CUMBRE_NCARDONES_C1",
+                "NC_NCARDONES_NMAITENCILLO_C1",
+                "NC_NMAITENCILLO_NPAZUCAR_C1",
+                "NC_NPAZUCAR_POLPAICO_C1",
+            ),
+        )
+
+    def test_single_case_directory_does_not_require_monte_carlo_naming(self):
+        with TemporaryDirectory() as temporary_directory:
+            result_directory = Path(temporary_directory) / "SEN2026_case"
+            result_directory.mkdir()
+            result = MonteCarloRun.from_directory(
+                result_directory,
+                allow_non_monte_carlo_name=True,
+            )
+
+        self.assertEqual(result.run_id, 0)
+        self.assertEqual(result.display_name, "SEN2026_case")
+
+    def test_monte_carlo_directory_naming_remains_required_by_default(self):
+        with TemporaryDirectory() as temporary_directory:
+            result_directory = Path(temporary_directory) / "SEN2026_case"
+            result_directory.mkdir()
+
+            with self.assertRaises(ValueError):
+                MonteCarloRun.from_directory(result_directory)
+
     def test_220_kv_voltage_plot_selects_only_rms_voltage_signals(self):
         definition = next(
             item for item in GENERAL_FIGURES if item.filename == "06_220_kv_buses.png"
@@ -30,6 +112,14 @@ class GeneralOverviewDefinitionsTests(unittest.TestCase):
             item for item in GENERAL_FIGURES if item.filename == "05_500_kv_buses.png"
         )
         self.assertEqual(bus_500.plots[0].y_limits, (0.0, 1.5))
+        self.assertTrue(bus_500.plots[0].show_legend)
+        self.assertTrue(bus_500.plots[1].show_legend)
+
+        statcom = next(
+            item for item in GENERAL_FIGURES if item.filename == "11_statcom_svc_power.png"
+        )
+        self.assertTrue(statcom.plots[0].show_legend)
+        self.assertTrue(statcom.plots[1].show_legend)
         self.assertEqual(bus_500.plots[1].y_limits, (47.5, 52.5))
 
         der = next(

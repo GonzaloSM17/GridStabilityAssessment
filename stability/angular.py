@@ -14,12 +14,12 @@ ANGULAR_REFERENCE_NOTE = (
 
 
 def angular_excursion_limit(excursions: Sequence[Sequence[float]]) -> float:
-    """Return a symmetric axis of at least ±130°, extended in 10° steps."""
+    """Return a symmetric axis of at least ±140°, extended in 10° steps."""
     maximum_excursion = max(
         (abs(value) for excursion in excursions for value in excursion),
         default=0.0,
     )
-    return float(max(130, ceil(maximum_excursion / 10.0) * 10))
+    return float(max(140, ceil(maximum_excursion / 10.0) * 10))
 
 
 def angular_excursion_ticks(limit_degrees: float) -> tuple[float, ...]:

@@ -15,6 +15,33 @@ MEASUREMENT_SUFFIXES = {
 }
 
 
+NORTH_TO_SOUTH_TRANSFER_PATHS = (
+    ("KIMAL", "CHANGOS"),
+    ("CHANGOS", "JADRESIC"),
+    ("JADRESIC", "CUMBRE"),
+    ("CUMBRE", "NCARDONES"),
+    ("NCARDONES", "NMAITENCILLO"),
+    ("NMAITENCILLO", "NPAZUCAR"),
+    ("NPAZUCAR", "POLPAICO"),
+)
+
+NORTH_TO_SOUTH_500_KV_BUSES = (
+    ("KIMAL",),
+    ("LOSCHANGOS", "LCHANGOS"),
+    ("JADRESIC",),
+    ("CUMBRE",),
+    ("NCARDONES",),
+    ("NMAITENCILLO",),
+    ("NPAZUCAR",),
+    ("POLPAICO",),
+    ("ALTOJAHUEL", "AJAHUEL"),
+    ("LOAGUIRRE",),
+    ("ANCOA",),
+    ("ERIOS",),
+    ("CHARRUA",),
+)
+
+
 @dataclass(frozen=True)
 class Measurement:
     """One published measurement at a bus."""
@@ -139,3 +166,37 @@ class SignalCatalog:
     def _normalise_bus_name(name: str) -> str:
         """Compare bus names independently of separators and letter case."""
         return re.sub(r"[^A-Z0-9]", "", name.upper())
+
+
+def order_power_transfers_north_to_south(
+    transfers: tuple[PowerTransfer, ...],
+) -> tuple[PowerTransfer, ...]:
+    """Order known 500 kV transfer corridors from north to south.
+
+    Any transfer outside the declared corridor remains available after the
+    ordered list, sorted by its published name.
+    """
+    return tuple(sorted(transfers, key=lambda transfer: transfer_north_to_south_order_key(transfer.name)))
+
+
+def transfer_north_to_south_order_key(name: str) -> tuple[int, str]:
+    """Return the north-to-south sorting key for a published transfer name."""
+    normalized_name = re.sub(r"[^A-Z0-9]", "", name.upper())
+    for index, endpoints in enumerate(NORTH_TO_SOUTH_TRANSFER_PATHS):
+        if all(endpoint in normalized_name for endpoint in endpoints):
+            return index, normalized_name
+    return len(NORTH_TO_SOUTH_TRANSFER_PATHS), normalized_name
+
+
+def order_500_kv_buses_north_to_south(buses: tuple[Bus, ...]) -> tuple[Bus, ...]:
+    """Order known 500 kV buses from north to south."""
+    return tuple(sorted(buses, key=lambda bus: bus_north_to_south_order_key(bus.name)))
+
+
+def bus_north_to_south_order_key(name: str) -> tuple[int, str]:
+    """Return the north-to-south sorting key for a 500 kV bus name."""
+    normalized_name = re.sub(r"[^A-Z0-9]", "", name.upper())
+    for index, aliases in enumerate(NORTH_TO_SOUTH_500_KV_BUSES):
+        if any(alias in normalized_name for alias in aliases):
+            return index, normalized_name
+    return len(NORTH_TO_SOUTH_500_KV_BUSES), normalized_name

@@ -81,7 +81,7 @@ class SingleRunReport:
         )
         sheet.append(("Scope", "Item", "Value", "Detail"))
         rows = (
-            ("Case", "Run", f"run_{self.run.run_id:06d}", None),
+            ("Case", "Result directory", self.run.display_name, None),
             ("Case", "Scenario", self.profile.scenario.name, None),
             ("Case", "Severity", self.profile.scenario.severity, None),
             ("Case", "Fault / clearance [s]", f"{self.profile.scenario.fault_time_s:.3f} / {self.profile.scenario.clearance_time_s:.3f}", None),

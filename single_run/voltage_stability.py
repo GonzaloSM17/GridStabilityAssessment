@@ -5,7 +5,7 @@ from math import ceil, floor, log10
 from pathlib import Path
 
 from data.run import MonteCarloRun
-from data.signals import Bus, SignalCatalog
+from data.signals import Bus, SignalCatalog, order_500_kv_buses_north_to_south
 from stability.scenario import EvaluationProfile
 from stability.voltage import StabilityAssessment, assess_stability
 
@@ -90,12 +90,16 @@ class SingleRunVoltageStability:
     def analyze(self) -> VoltageStabilityAnalysis:
         """Apply the shared voltage-recovery criteria to every eligible bus."""
         catalog = SignalCatalog.from_dataset(self.run.dataset)
-        selected_buses = tuple(
-            (bus, level)
-            for level in (220, 500)
-            for bus in catalog.buses
-            if self._belongs_to_voltage_level(bus, level)
-        )
+        selected_buses = []
+        for level in (220, 500):
+            buses = tuple(
+                bus for bus in catalog.buses
+                if self._belongs_to_voltage_level(bus, level)
+            )
+            if level == 500:
+                buses = order_500_kv_buses_north_to_south(buses)
+            selected_buses.extend((bus, level) for bus in buses)
+        selected_buses = tuple(selected_buses)
         if not selected_buses:
             raise ValueError("No 220 kV or 500 kV RMS-voltage signals were found.")
 
@@ -138,7 +142,7 @@ class SingleRunVoltageStability:
         maximum_time_s = self.run.dataset.maximum_time_s()
         figure_paths = []
 
-        for level, prefix in ((220, 1), (500, 4)):
+        for level, prefix, complete_prefix in ((220, 1, 7), (500, 4, 8)):
             assessments = analysis.for_voltage_level(level)
             if not assessments:
                 continue
@@ -150,6 +154,7 @@ class SingleRunVoltageStability:
                         start_time_s=0.0,
                         end_time_s=min(maximum_time_s, 3.0),
                         title=f"{level} kV Voltage Stability",
+                        bus_legend_location="lower left",
                     ),
                 ),
                 (
@@ -159,6 +164,7 @@ class SingleRunVoltageStability:
                         start_time_s=0.9,
                         end_time_s=min(maximum_time_s, 2.2),
                         title=f"{level} kV Voltage Stability — Contingency Close-up",
+                        bus_legend_location="lower center",
                     ),
                 ),
                 (
@@ -168,6 +174,17 @@ class SingleRunVoltageStability:
                         start_time_s=0.9,
                         end_time_s=min(maximum_time_s, 1.2),
                         title=f"{level} kV Voltage Stability — Fault and Clearance",
+                        bus_legend_location="lower left",
+                    ),
+                ),
+                (
+                    f"{complete_prefix:02d}_{level}_kv_complete_simulation.png",
+                    self._plot_voltage_signals(
+                        assessments,
+                        start_time_s=0.0,
+                        end_time_s=min(maximum_time_s, 10.0),
+                        title=f"{level} kV Voltage Stability — Complete Simulation",
+                        bus_legend_location="lower center",
                     ),
                 ),
             )
@@ -186,6 +203,7 @@ class SingleRunVoltageStability:
         start_time_s: float,
         end_time_s: float,
         title: str,
+        bus_legend_location: str = "lower left",
     ):
         import matplotlib.pyplot as plt
         from matplotlib.cm import ScalarMappable
@@ -239,6 +257,7 @@ class SingleRunVoltageStability:
         reference_legend = axis.legend(
             handles=(
                 Patch(facecolor="#F0B323", alpha=0.16, label="Contingency"),
+                Patch(facecolor="#F0B323", alpha=0.07, label="Recovery window"),
                 *self._voltage_reference_handles(),
             ),
             loc="lower right",
@@ -254,7 +273,7 @@ class SingleRunVoltageStability:
             axis.add_artist(reference_legend)
             axis.legend(
                 title="500 kV buses",
-                loc="upper left",
+                loc=bus_legend_location,
                 ncol=2 if len(assessments) > 5 else 1,
                 fontsize=7,
                 title_fontsize=8,

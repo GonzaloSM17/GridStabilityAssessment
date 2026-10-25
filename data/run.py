@@ -1,4 +1,4 @@
-"""Representation of one Monte Carlo simulation run."""
+"""Representation of one published simulation result directory."""
 
 from dataclasses import dataclass
 from math import pi, sqrt
@@ -27,22 +27,35 @@ class ActiveControllerParameters:
 
 @dataclass
 class MonteCarloRun:
-    """Represents one published simulation run."""
+    """Represents one published simulation result.
+
+    Monte Carlo folders use the ``run_XXXXXX`` convention. Focused single-run
+    analysis can also point directly to a normally named result directory.
+    """
 
     run_id: int
     run_path: Path
     dataset: TimeSeriesDataset | None
 
     @classmethod
-    def from_directory(cls, run_path: str | Path) -> "MonteCarloRun":
-        """Create a run from its directory and locate its Parquet result."""
+    def from_directory(
+        cls,
+        run_path: str | Path,
+        *,
+        allow_non_monte_carlo_name: bool = False,
+    ) -> "MonteCarloRun":
+        """Create a result from its directory and locate its Parquet result.
+
+        The default preserves Monte Carlo validation. Set
+        ``allow_non_monte_carlo_name`` only for a focused single-case flow.
+        """
         path = Path(run_path).expanduser().resolve()
 
         if not path.is_dir():
             raise NotADirectoryError(f"Run directory not found: {path}")
 
         match = RUN_DIRECTORY_PATTERN.fullmatch(path.name)
-        if match is None:
+        if match is None and not allow_non_monte_carlo_name:
             raise ValueError(
                 "Run directory names must follow the format 'run_XXXXXX': "
                 f"{path.name}"
@@ -55,10 +68,15 @@ class MonteCarloRun:
         dataset = TimeSeriesDataset(parquet_files[0]) if parquet_files else None
 
         return cls(
-            run_id=int(match.group(1)),
+            run_id=int(match.group(1)) if match else 0,
             run_path=path,
             dataset=dataset,
         )
+
+    @property
+    def display_name(self) -> str:
+        """Return the published folder name for reports and user-facing output."""
+        return self.run_path.name
 
     def read_parameters(self):
         """Read the parameter table saved with this run."""

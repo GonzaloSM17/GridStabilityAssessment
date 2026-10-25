@@ -1,11 +1,16 @@
 """Active-power transfer modal-damping assessment for one simulation run."""
 
 from dataclasses import dataclass
-from math import ceil, floor, log10
+from math import ceil
 from pathlib import Path
 
 from data.run import MonteCarloRun
-from data.signals import PowerTransfer, SignalCatalog
+from data.signals import (
+    PowerTransfer,
+    SignalCatalog,
+    order_power_transfers_north_to_south,
+)
+from single_run.plotting import close_y_axis
 from stability.power_transfer import TransferRunAssessment, assess_transfer_damping, isolate_mode
 from stability.scenario import EvaluationProfile
 
@@ -49,7 +54,7 @@ class SingleRunDampingStability:
     def analyze(self) -> TransferDampingAnalysis:
         """Apply the common modal-damping procedure to each PQ transfer monitor."""
         catalog = SignalCatalog.from_dataset(self.run.dataset)
-        transfers = catalog.power_transfers
+        transfers = order_power_transfers_north_to_south(catalog.power_transfers)
         if not transfers:
             raise ValueError("No PQ_* active-power transfer monitors were found.")
         data = self.run.dataset.read_series_group(
@@ -317,9 +322,11 @@ class SingleRunDampingStability:
         axis.axvline(0.0, color="#5E6472", linewidth=1.0)
         axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.0)
         axis.set_yticks(range(len(measurable_records)), labels)
-        axis.set_xlabel("Damping ratio, ξ (%)")
-        axis.set_ylabel("500 kV transfers", fontsize=9)
-        axis.tick_params(axis="y", labelsize=8.5)
+        axis.invert_yaxis()
+        axis.set_xlabel("Damping ratio, ξ (%)", fontsize=10, labelpad=7)
+        axis.set_ylabel("500 kV Transmission Corridors", fontsize=10, labelpad=10)
+        axis.tick_params(axis="x", labelsize=9)
+        axis.tick_params(axis="y", labelsize=9)
         axis.set_title(title, fontsize=13, fontweight="normal", pad=10)
         self._style_axis(axis)
         axis.grid(axis="x", visible=True, color="#D6D9DC", linewidth=0.6, alpha=0.85)
@@ -328,7 +335,7 @@ class SingleRunDampingStability:
         )
         color_bar.set_label("EM mode frequency (Hz)", fontsize=9)
         color_bar.ax.tick_params(labelsize=8)
-        figure.subplots_adjust(left=0.25, right=0.90, bottom=0.13, top=0.88)
+        figure.subplots_adjust(left=0.27, right=0.90, bottom=0.17, top=0.88)
         return figure
 
     @staticmethod
@@ -389,7 +396,7 @@ class SingleRunDampingStability:
         axis.set_xlabel("Time (s)")
         axis.set_ylabel(y_label)
         self._style_axis(axis)
-        self._close_y_axis(axis)
+        close_y_axis(axis)
 
     def _draw_event_context(self, axis) -> None:
         criteria = self.profile.transfer_damping_criteria
@@ -416,22 +423,4 @@ class SingleRunDampingStability:
         axis.grid(visible=True, color="#D6D9DC", linewidth=0.55, alpha=0.8)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
-
-    @staticmethod
-    def _close_y_axis(axis) -> None:
-        """Close a signal axis at rounded limits while retaining a small visual margin."""
-        import numpy as np
-
-        lower, upper = axis.get_ylim()
-        if lower == upper:
-            return
-        target_step = (upper - lower) / 5.0
-        magnitude = 10.0 ** floor(log10(target_step))
-        candidates = tuple(value * magnitude for value in (1.0, 2.0, 5.0, 10.0))
-        step = min(candidates, key=lambda value: abs(value - target_step))
-        closed_lower = floor(lower / step) * step
-        closed_upper = ceil(upper / step) * step
-        tick_count = round((closed_upper - closed_lower) / step)
-        axis.set_ylim(closed_lower, closed_upper)
-        axis.set_yticks(closed_lower + np.arange(tick_count + 1) * step)
 

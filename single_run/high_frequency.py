@@ -5,7 +5,12 @@ from math import ceil
 from pathlib import Path
 
 from data.run import MonteCarloRun
-from data.signals import PowerTransfer, SignalCatalog
+from data.signals import (
+    PowerTransfer,
+    SignalCatalog,
+    order_power_transfers_north_to_south,
+)
+from single_run.plotting import close_y_axis
 from stability.power_transfer import (
     HighFrequencyTransferAssessment,
     assess_high_frequency_components,
@@ -56,7 +61,7 @@ class SingleRunHighFrequency:
     def analyze(self) -> HighFrequencyAnalysis:
         """Observe 2.5–50 Hz transfer components without assessing stability."""
         catalog = SignalCatalog.from_dataset(self.run.dataset)
-        transfers = catalog.power_transfers
+        transfers = order_power_transfers_north_to_south(catalog.power_transfers)
         if not transfers:
             raise ValueError("No PQ_* active-power transfer monitors were found.")
         data = self.run.dataset.read_series_group(
@@ -114,8 +119,7 @@ class SingleRunHighFrequency:
             else:
                 frequencies, powers = spectrum
                 axis.plot(frequencies, powers, color="#4C78A8", linewidth=0.9)
-                for component in record.assessment.components:
-                    axis.axvline(component.frequency_hz, color="#E67E22", linestyle="--", linewidth=0.9)
+                close_y_axis(axis)
             axis.set_title(self._display_name(record.transfer.name), fontsize=8.8, fontweight="normal", pad=5)
             axis.set(xlim=(criteria.minimum_frequency_hz, criteria.maximum_frequency_hz), xlabel="Frequency (Hz)", ylabel="Spectral power")
             axis.set_facecolor("white")
