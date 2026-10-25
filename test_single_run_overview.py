@@ -120,6 +120,11 @@ class GeneralOverviewDefinitionsTests(unittest.TestCase):
         )
         self.assertTrue(statcom.plots[0].show_legend)
         self.assertTrue(statcom.plots[1].show_legend)
+
+        sm_dynamics = next(
+            item for item in GENERAL_FIGURES if item.filename == "04_sm_dynamics.png"
+        )
+        self.assertEqual(sm_dynamics.plots[0].y_limits, (0.99, 1.01))
         self.assertEqual(bus_500.plots[1].y_limits, (47.5, 52.5))
 
         der = next(

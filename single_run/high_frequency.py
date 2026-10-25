@@ -10,7 +10,7 @@ from data.signals import (
     SignalCatalog,
     order_power_transfers_north_to_south,
 )
-from single_run.plotting import close_y_axis
+from stability.plotting import close_y_axis
 from stability.power_transfer import (
     HighFrequencyTransferAssessment,
     assess_high_frequency_components,

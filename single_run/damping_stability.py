@@ -10,7 +10,7 @@ from data.signals import (
     SignalCatalog,
     order_power_transfers_north_to_south,
 )
-from single_run.plotting import close_y_axis
+from stability.plotting import close_y_axis
 from stability.power_transfer import TransferRunAssessment, assess_transfer_damping, isolate_mode
 from stability.scenario import EvaluationProfile
 
@@ -324,7 +324,7 @@ class SingleRunDampingStability:
         axis.set_yticks(range(len(measurable_records)), labels)
         axis.invert_yaxis()
         axis.set_xlabel("Damping ratio, ξ (%)", fontsize=10, labelpad=7)
-        axis.set_ylabel("500 kV Transmission Corridors", fontsize=10, labelpad=10)
+        axis.set_ylabel("500 kV Transmission System", fontsize=10, labelpad=10)
         axis.tick_params(axis="x", labelsize=9)
         axis.tick_params(axis="y", labelsize=9)
         axis.set_title(title, fontsize=13, fontweight="normal", pad=10)

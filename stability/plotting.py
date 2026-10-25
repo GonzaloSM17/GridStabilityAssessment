@@ -1,4 +1,4 @@
-"""Small shared plotting utilities for focused single-run artefacts."""
+"""Small shared plotting utilities for stability-analysis artefacts."""
 
 from math import ceil, floor, log10
 

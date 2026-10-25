@@ -13,7 +13,12 @@ from stability.initialization import (
     InitializationCriteria,
     assess_initialization,
 )
-from data.signals import Measurement, VOLTAGE_RMS
+from data.signals import (
+    Measurement,
+    VOLTAGE_RMS,
+    order_power_transfers_north_to_south,
+    transfer_north_to_south_order_key,
+)
 from stability.scenario import (
     DEFAULT_CONTINGENCY_SCENARIO,
     ContingencyScenario,
@@ -34,6 +39,7 @@ from stability.power_transfer import (
     isolate_mode,
     spectral_power_spectrum,
 )
+from stability.plotting import close_y_axis
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
@@ -483,7 +489,7 @@ class AnalysisPipeline:
     ) -> TransferStudyAnalysis:
         """Assess every explicitly published active-power transfer in every run."""
         criteria = criteria or self.profile.transfer_damping_criteria
-        transfers = self.study.power_transfers
+        transfers = order_power_transfers_north_to_south(self.study.power_transfers)
         columns = tuple(transfer.column_name for transfer in transfers)
         assessments = []
         for run in self.context.runs:
@@ -538,7 +544,7 @@ class AnalysisPipeline:
         damping value or stability classification is calculated here.
         """
         criteria = criteria or self.profile.high_frequency_criteria
-        transfers = self.study.power_transfers
+        transfers = order_power_transfers_north_to_south(self.study.power_transfers)
         columns = tuple(transfer.column_name for transfer in transfers)
         assessments = []
         for run in self.context.runs:
@@ -578,7 +584,7 @@ class AnalysisPipeline:
         transfer stability or damping decision is made here.
         """
         end_time_s = self._transfer_plot_end_time(start_time_s, end_time_s)
-        transfers = self.study.power_transfers
+        transfers = order_power_transfers_north_to_south(self.study.power_transfers)
         if not transfers:
             raise ValueError("No PQ_* active-power transfer monitors were found.")
 
@@ -677,7 +683,7 @@ class AnalysisPipeline:
                     color="#1F3A5F",
                     linewidth=1.4,
                 )
-            axis.set_title(transfer.name, fontsize=9)
+            axis.set_title(self._display_transfer_name(transfer.name), fontsize=9)
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
 
@@ -762,7 +768,7 @@ class AnalysisPipeline:
         from matplotlib.colors import Normalize
         from matplotlib.cm import ScalarMappable
 
-        transfer_names = analysis.transfer_names
+        transfer_names = self._ordered_transfer_names(analysis)
         if not transfer_names:
             raise ValueError("No active-power transfer modal-damping assessments are available.")
         damping_ratios = tuple(mode.damping_ratio for _, mode in records)
@@ -798,12 +804,17 @@ class AnalysisPipeline:
                 alpha=0.78,
                 edgecolors="none",
             )
-            labels.append(f"{transfer_name}\n{len(evaluated)} modes")
+            labels.append(
+                f"{self._display_transfer_name(transfer_name)}\n{len(evaluated)} modes"
+            )
         axis.axvline(0.0, color="#555555", linestyle="-", linewidth=1.0)
         axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.2)
         axis.set_yticks(range(len(evaluated_transfer_names)), labels)
-        axis.set_xlabel("Damping ratio, xi (%)")
-        axis.set_ylabel("500 kV transmission system")
+        axis.invert_yaxis()
+        axis.set_xlabel("Damping ratio, xi (%)", fontsize=10, labelpad=7)
+        axis.set_ylabel("500 kV Transmission System", fontsize=10, labelpad=10)
+        axis.tick_params(axis="x", labelsize=9)
+        axis.tick_params(axis="y", labelsize=9)
         lower_bound = min(0.0, min(damping_ratios) * 100.0)
         largest_positive_ratio = max(0.0, max(damping_ratios) * 100.0)
         upper_bound = (
@@ -874,7 +885,7 @@ class AnalysisPipeline:
 
         end_time_s = self._transfer_plot_end_time(start_time_s, end_time_s)
         lowest_assessments = []
-        for transfer_name in analysis.transfer_names:
+        for transfer_name in self._ordered_transfer_names(analysis):
             assessed = [
                 item
                 for item in analysis.assessments_for_transfer(transfer_name)
@@ -913,7 +924,7 @@ class AnalysisPipeline:
                 zorder=3,
             )
             axis.set_title(
-                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"{self._display_transfer_name(assessment.transfer_name)} | run_{assessment.run_id:05d} | "
                 f"f_mode={mode.frequency_hz:.2f} Hz | "
                 f"xi={assessment.damping_ratio * 100:.2f}%",
                 fontsize=8.5,
@@ -921,6 +932,7 @@ class AnalysisPipeline:
             )
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
+            close_y_axis(axis)
         for axis in axes[len(lowest_assessments):]:
             axis.set_visible(False)
         for axis in axes[::columns]:
@@ -951,7 +963,7 @@ class AnalysisPipeline:
         import numpy as np
 
         lowest_assessments = []
-        for transfer_name in analysis.transfer_names:
+        for transfer_name in self._ordered_transfer_names(analysis):
             assessed = [
                 item
                 for item in analysis.assessments_for_transfer(transfer_name)
@@ -1008,7 +1020,7 @@ class AnalysisPipeline:
                 )
             axis.axhline(0.0, color="#555555", linewidth=0.75)
             axis.set_title(
-                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"{self._display_transfer_name(assessment.transfer_name)} | run_{assessment.run_id:05d} | "
                 f"f_mode={mode.frequency_hz:.2f} Hz | "
                 f"xi={assessment.damping_ratio * 100:.2f}%",
                 fontsize=8.5,
@@ -1016,6 +1028,7 @@ class AnalysisPipeline:
             )
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
+            close_y_axis(axis)
         for axis in axes[len(lowest_assessments):]:
             axis.set_visible(False)
         for axis in axes[::columns]:
@@ -1049,7 +1062,7 @@ class AnalysisPipeline:
         from matplotlib.colors import Normalize
 
         lowest_assessments = []
-        for transfer_name in analysis.transfer_names:
+        for transfer_name in self._ordered_transfer_names(analysis):
             assessed = [
                 item
                 for item in analysis.assessments_for_transfer(transfer_name)
@@ -1120,13 +1133,14 @@ class AnalysisPipeline:
 
             axis.axhline(0.0, color="#555555", linewidth=0.75, zorder=0)
             axis.set_title(
-                f"{assessment.transfer_name} | run_{assessment.run_id:05d} | "
+                f"{self._display_transfer_name(assessment.transfer_name)} | run_{assessment.run_id:05d} | "
                 f"limiting xi={assessment.damping_ratio * 100:.2f}%",
                 fontsize=8.5,
                 pad=8,
             )
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
+            close_y_axis(axis)
 
         for axis in axes[len(lowest_assessments):]:
             axis.set_visible(False)
@@ -1165,7 +1179,7 @@ class AnalysisPipeline:
         import numpy as np
 
         lowest_assessments = []
-        for transfer_name in transfer_analysis.transfer_names:
+        for transfer_name in self._ordered_transfer_names(transfer_analysis):
             assessed = [
                 item
                 for item in transfer_analysis.assessments_for_transfer(transfer_name)
@@ -1213,7 +1227,7 @@ class AnalysisPipeline:
                 axis.text(0.5, 0.5, "No observable high-frequency spectrum.", ha="center", va="center", transform=axis.transAxes)
             else:
                 frequencies, powers = spectrum
-                axis.semilogy(frequencies, powers, color="#4C78A8", linewidth=0.9)
+                axis.plot(frequencies, powers, color="#4C78A8", linewidth=0.9)
                 if observation.components:
                     axis.scatter(
                         [component.frequency_hz for component in observation.components],
@@ -1222,9 +1236,10 @@ class AnalysisPipeline:
                         s=14,
                         zorder=3,
                     )
+                close_y_axis(axis)
             component_count = len(observation.components)
             axis.set_title(
-                f"{damping_assessment.transfer_name} | run_{damping_assessment.run_id:05d} | "
+                f"{self._display_transfer_name(damping_assessment.transfer_name)} | run_{damping_assessment.run_id:05d} | "
                 f"{component_count} components",
                 fontsize=8.5,
                 pad=8,
@@ -1268,7 +1283,7 @@ class AnalysisPipeline:
         from matplotlib.colors import Normalize
 
         lowest_assessments = []
-        for transfer_name in transfer_analysis.transfer_names:
+        for transfer_name in self._ordered_transfer_names(transfer_analysis):
             assessed = [
                 item
                 for item in transfer_analysis.assessments_for_transfer(transfer_name)
@@ -1352,13 +1367,14 @@ class AnalysisPipeline:
                 axis.text(0.5, 0.5, "No detected high-frequency components.", ha="center", va="center", transform=axis.transAxes)
             axis.axhline(0.0, color="#555555", linewidth=0.75, zorder=0)
             axis.set_title(
-                f"{damping_assessment.transfer_name} | run_{damping_assessment.run_id:05d} | "
+                f"{self._display_transfer_name(damping_assessment.transfer_name)} | run_{damping_assessment.run_id:05d} | "
                 f"{len(observation.components)} components",
                 fontsize=8.5,
                 pad=8,
             )
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
+            close_y_axis(axis)
         for axis in axes[len(lowest_assessments):]:
             axis.set_visible(False)
         for axis in axes[::columns]:
@@ -1405,6 +1421,23 @@ class AnalysisPipeline:
         if start_time_s >= end_time_s:
             raise ValueError("The transfer-view start must precede its end.")
         return end_time_s
+
+    @staticmethod
+    def _ordered_transfer_names(
+        analysis: TransferStudyAnalysis,
+    ) -> tuple[str, ...]:
+        """Return transfer names in the shared north-to-south presentation order."""
+        return tuple(
+            sorted(
+                analysis.transfer_names,
+                key=transfer_north_to_south_order_key,
+            )
+        )
+
+    @staticmethod
+    def _display_transfer_name(name: str) -> str:
+        """Remove the measurement-area prefix from transfer figure labels."""
+        return name.removeprefix("NC_").removeprefix("SC_")
 
     def plot_controller_population(
         self,
@@ -1727,6 +1760,7 @@ class AnalysisPipeline:
                     label=criterion_label,
                 )
             axis.set_ylim(0.0, metric_y_upper_limit)
+            close_y_axis(axis)
             axis.grid(visible=True, alpha=0.3)
             axis.legend(loc="upper right")
 
@@ -2129,6 +2163,20 @@ class AnalysisPipeline:
                 linewidth=1.0,
                 label="0.70 pu",
             )
+            axis.axhline(
+                1.10,
+                color="#4C78A8",
+                linestyle="--",
+                linewidth=1.0,
+                label="1.10 pu",
+            )
+            axis.axhline(
+                1.20,
+                color="#6A3D9A",
+                linestyle="--",
+                linewidth=1.0,
+                label="1.20 pu",
+            )
             axis.axvline(
                 crisis_deadline_time_s,
                 color="tab:red",
@@ -2153,7 +2201,7 @@ class AnalysisPipeline:
                 )
             axis.set_title(f"{group_title} ({len(run_ids)} runs)")
             axis.set_ylabel("Voltage (pu)")
-            axis.set_ylim(0.1, 1.5)
+            axis.set_ylim(0.0, 1.5)
             axis.grid(visible=True, alpha=0.3)
             axis.legend(loc=legend_location, fontsize="small")
 

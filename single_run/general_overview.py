@@ -17,6 +17,7 @@ from stability.angular import (
     angular_excursion_ticks,
 )
 from stability.scenario import ContingencyScenario
+from stability.plotting import close_y_axis
 
 SignalSelector = Callable[[str], bool]
 
@@ -122,6 +123,7 @@ GENERAL_FIGURES = (
                 "Rotor Speed",
                 "Rotor speed (pu)",
                 _matches(rf"^{SYNCHRONOUS_MACHINE_PREFIX}_[^/]+/Omega_"),
+                y_limits=(0.99, 1.01),
             ),
             GeneralPlotDefinition(
                 "Angular Excursion",
@@ -470,8 +472,11 @@ class GeneralOverview:
             elif plot.y_limits is not None:
                 axis.set_ylim(*plot.y_limits)
             else:
-                axis.set_ylim(*self._nice_y_limits(*axis.get_ylim()))
-            if not plot.use_coi_angular_excursions:
+                close_y_axis(axis)
+            if (
+                not plot.use_coi_angular_excursions
+                and plot.y_limits is not None
+            ):
                 self._set_readable_y_ticks(axis, plot.show_voltage_references)
             if plot.show_voltage_references:
                 axis.legend(
