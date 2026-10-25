@@ -39,7 +39,7 @@ from stability.power_transfer import (
     isolate_mode,
     spectral_power_spectrum,
 )
-from stability.plotting import close_y_axis
+from stability.plotting import close_y_axis, label_damping_reference_limits
 
 
 FN_PLOT_LIMITS_HZ = (0.0, 60.0)
@@ -686,6 +686,7 @@ class AnalysisPipeline:
             axis.set_title(self._display_transfer_name(transfer.name), fontsize=9)
             axis.grid(visible=True, alpha=0.3)
             axis.set_xlim(start_time_s, end_time_s)
+            close_y_axis(axis)
 
         for axis in axes[len(transfers):]:
             axis.set_visible(False)
@@ -824,24 +825,7 @@ class AnalysisPipeline:
         )
         axis.set_xlim(lower_bound, upper_bound)
         axis.grid(axis="x", visible=True, alpha=0.3)
-        axis.text(
-            0.0,
-            0.98,
-            "0%",
-            color="#555555",
-            ha="left",
-            va="top",
-            transform=axis.get_xaxis_transform(),
-        )
-        axis.text(
-            5.0,
-            0.98,
-            "5% limit",
-            color="#D73027",
-            ha="left",
-            va="top",
-            transform=axis.get_xaxis_transform(),
-        )
+        label_damping_reference_limits(axis)
         color_bar = figure.colorbar(
             ScalarMappable(norm=frequency_normalization, cmap=frequency_color_map),
             ax=axis,

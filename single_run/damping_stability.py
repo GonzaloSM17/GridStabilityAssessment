@@ -10,7 +10,7 @@ from data.signals import (
     SignalCatalog,
     order_power_transfers_north_to_south,
 )
-from stability.plotting import close_y_axis
+from stability.plotting import close_y_axis, label_damping_reference_limits
 from stability.power_transfer import TransferRunAssessment, assess_transfer_damping, isolate_mode
 from stability.scenario import EvaluationProfile
 
@@ -321,6 +321,7 @@ class SingleRunDampingStability:
         axis.set_xlim(lower_bound - padding, upper_bound + padding)
         axis.axvline(0.0, color="#5E6472", linewidth=1.0)
         axis.axvline(5.0, color="#D73027", linestyle="--", linewidth=1.0)
+        label_damping_reference_limits(axis)
         axis.set_yticks(range(len(measurable_records)), labels)
         axis.invert_yaxis()
         axis.set_xlabel("Damping ratio, ξ (%)", fontsize=10, labelpad=7)
