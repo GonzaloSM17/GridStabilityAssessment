@@ -7,7 +7,11 @@ from pathlib import Path
 import re
 
 from data.run import MonteCarloRun
-from stability.angular import AngularCalculation, angular_excursion_limit
+from stability.angular import (
+    AngularCalculation,
+    angular_excursion_limit,
+    angular_excursion_ticks,
+)
 from stability.scenario import ContingencyScenario
 
 
@@ -362,11 +366,13 @@ class GeneralOverview:
             if plot.use_coi_angular_excursions:
                 limit = angular_excursion_limit(self.angular_calculation.excursions)
                 axis.set_ylim(-limit, limit)
+                axis.set_yticks(angular_excursion_ticks(limit))
             elif plot.y_limits is not None:
                 axis.set_ylim(*plot.y_limits)
             else:
                 axis.set_ylim(*self._nice_y_limits(*axis.get_ylim()))
-            self._set_readable_y_ticks(axis, plot.show_voltage_references)
+            if not plot.use_coi_angular_excursions:
+                self._set_readable_y_ticks(axis, plot.show_voltage_references)
             if plot.show_voltage_references:
                 axis.legend(
                     loc="lower right",

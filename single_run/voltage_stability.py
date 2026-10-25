@@ -216,6 +216,7 @@ class SingleRunVoltageStability:
         figure, axis = plt.subplots(figsize=(13.5, 6.8))
         figure.patch.set_facecolor("white")
         self._draw_voltage_context(axis)
+        show_bus_legend = all(item.voltage_level_kv == 500 for item in assessments)
         for item in assessments:
             name = item.bus.voltage_rms().column_name
             axis.plot(
@@ -224,6 +225,7 @@ class SingleRunVoltageStability:
                 color=color_map(normalization(item.assessment.unified_response_area_pu_s)),
                 linewidth=0.8,
                 alpha=0.78,
+                label=item.bus.name if show_bus_legend else "_nolegend_",
             )
         axis.set(
             xlim=(start_time_s, end_time_s),
@@ -234,7 +236,7 @@ class SingleRunVoltageStability:
         axis.set_yticks(tuple(index / 10 for index in range(16)))
         self._style_axis(axis)
         axis.set_title(title, fontsize=13, fontweight="normal", pad=8)
-        axis.legend(
+        reference_legend = axis.legend(
             handles=(
                 Patch(facecolor="#F0B323", alpha=0.16, label="Contingency"),
                 *self._voltage_reference_handles(),
@@ -248,6 +250,20 @@ class SingleRunVoltageStability:
             edgecolor="#AEB4BA",
             facecolor="white",
         )
+        if show_bus_legend:
+            axis.add_artist(reference_legend)
+            axis.legend(
+                title="500 kV buses",
+                loc="upper left",
+                ncol=2 if len(assessments) > 5 else 1,
+                fontsize=7,
+                title_fontsize=8,
+                frameon=True,
+                fancybox=False,
+                framealpha=0.96,
+                edgecolor="#AEB4BA",
+                facecolor="white",
+            )
         color_bar = figure.colorbar(
             ScalarMappable(norm=normalization, cmap=color_map),
             ax=axis,

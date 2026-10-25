@@ -13,6 +13,7 @@ from stability.angular import (
     AngularMachineInput,
     AngularStabilityAnalysis,
     angular_excursion_limit,
+    angular_excursion_ticks,
     assess_angular_stability,
 )
 from stability.scenario import ContingencyScenario
@@ -148,6 +149,7 @@ class SingleRunAngularStability:
         axis.axhline(-ANGULAR_LIMIT_DEGREES, color="#D73027", linestyle="--", linewidth=1.0)
         axis.axhline(0.0, color="#5E6472", linewidth=0.75)
         limit = angular_excursion_limit(calculation.excursions)
+        axis.set_yticks(angular_excursion_ticks(limit))
         axis.set(xlim=(0.0, self.run.dataset.maximum_time_s()), ylim=(-limit, limit), xlabel="Time (s)", ylabel="Angular excursion, Δδ (deg)")
         self._style_axis(axis)
 

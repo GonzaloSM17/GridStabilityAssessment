@@ -5,10 +5,7 @@ from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
     # Set to None to select one run_XXXXXX directory through Tk.
-    run_path = (
-        r"C:\Users\gonzalo.sanchez\Desktop\Results Compiled"
-        r"\cache_20261020_1912_8c8eb7\runs\run_000180"
-    )
+    run_path = None
     scenario = ContingencyScenario(
         name="KIMAL CC-2PH-G",
         severity=4,

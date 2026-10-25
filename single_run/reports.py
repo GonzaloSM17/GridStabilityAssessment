@@ -64,6 +64,21 @@ class SingleRunReport:
         initialized_count = sum(item.assessment.is_well_initialized for item in self.initialization.records)
         statuses = tuple(record.assessment.status for record in self.damping.records)
         high_frequency_warnings = len(self.high_frequency.warning_records)
+        failed_buses = tuple(
+            item.bus.name
+            for item in self.voltage.assessments
+            if not item.assessment.is_stable
+        )
+        limiting_transfers = tuple(
+            record.assessment.transfer_name
+            for record in self.damping.records
+            if record.assessment.status in {"damped_under", "growing"}
+        )
+        angular_violations = tuple(
+            machine.machine_name
+            for machine in self.angular.machines
+            if not machine.is_within_limit
+        )
         sheet.append(("Scope", "Item", "Value", "Detail"))
         rows = (
             ("Case", "Run", f"run_{self.run.run_id:06d}", None),
@@ -71,20 +86,28 @@ class SingleRunReport:
             ("Case", "Severity", self.profile.scenario.severity, None),
             ("Case", "Fault / clearance [s]", f"{self.profile.scenario.fault_time_s:.3f} / {self.profile.scenario.clearance_time_s:.3f}", None),
             ("Dynamic Stability", "Assessment", self.dynamic.status, self.dynamic.reason),
+            ("Dynamic Stability", "Voltage criterion", self.dynamic.voltage_status, "All assessed 220/500 kV buses must comply."),
+            ("Dynamic Stability", "EM damping criterion", self.dynamic.modal_damping_status, "See Transfer Assessment for the mode-level trace."),
+            ("Dynamic Stability", "Angular criterion", self.dynamic.angular_status, "COI-referenced machine excursions."),
             ("Initialization", "Assessed 220/500 kV voltage signals", len(self.initialization.records), None),
             ("Initialization", "Well-initialized voltage signals", initialized_count, None),
             ("Initialization", "Initialization warnings", len(self.initialization.records) - initialized_count, None),
             ("Voltage", "220/500 kV assessed buses", voltage_total, None),
             ("Voltage", "Buses passing all active criteria", voltage_stable, None),
             ("Voltage", "Buses failing one or more criteria", voltage_total - voltage_stable, None),
+            ("Voltage", "Failing buses", ", ".join(failed_buses) or "None", "Detailed criteria are in Voltage Assessment."),
             ("Damping", "Published active-power transfers", len(statuses), None),
             ("Damping", "Damped", statuses.count("damped"), None),
-            ("Damping", "Damped under / growing", statuses.count("damped_under") + statuses.count("growing"), None),
-            ("Damping", "Not measurable / not applicable", sum(statuses.count(status) for status in ("not_measurable", "opened", "inactive_pre_fault")), None),
+            ("Damping", "Damped under 5%", statuses.count("damped_under"), None),
+            ("Damping", "Growing", statuses.count("growing"), None),
+            ("Damping", "Not measurable", statuses.count("not_measurable"), None),
+            ("Damping", "Not applicable", statuses.count("opened") + statuses.count("inactive_pre_fault"), None),
+            ("Damping", "Transfers limiting EM damping", ", ".join(limiting_transfers) or "None", "A limiting mode has damping below 5% or is growing."),
             ("High frequency", "Transfer warnings", high_frequency_warnings, "Observation only; does not alter dynamic stability."),
             ("Angular", "COI-referenced machine excursions", len(self.angular.machines), ANGULAR_REFERENCE_NOTE),
             ("Angular", "Angular stability", "Stable" if self.angular.is_stable else "Unstable", "All machines must remain strictly within ±120°"),
             ("Angular", "Machines within ±120°", sum(machine.is_within_limit for machine in self.angular.machines), None),
+            ("Angular", "Violating machines", ", ".join(angular_violations) or "None", "Detailed excursions are in Angular Assessment."),
         )
         for row in rows:
             sheet.append(row)
@@ -102,18 +125,73 @@ class SingleRunReport:
             sheet.append((item.bus.name, item.voltage_level_kv, "Stable" if value.is_stable else "Unstable", value.is_crisis_voltage_compliant, value.crisis_decision_event, value.crisis_decision_time_s, value.crisis_decision_duration_s, value.cumulative_low_voltage_duration_s, value.is_low_voltage_duration_compliant, value.is_settled, value.final_settlement_peak_absolute_relative_error * 100, value.final_settlement_peak_to_peak_relative_range * 100, value.fault_on_area_pu_s, value.recovery_area_pu_s, value.unified_response_area_pu_s))
 
     def _write_transfers(self, sheet) -> None:
-        sheet.append(("Transfer", "Pre-fault P [MW]", "Final P [MW]", "Assessment", "Dominant EM mode [Hz]", "Dominant damping [%]", "Critical EM mode [Hz]", "Critical damping [%]", "Note"))
+        sheet.append((
+            "Transfer",
+            "Pre-fault P [MW]",
+            "Final P [MW]",
+            "Transfer assessment",
+            "Detected EM modes",
+            "Measurable EM modes",
+            "EM composition",
+            "Representative mode [Hz]",
+            "Representative damping [%]",
+            "Representative mode status",
+            "Limiting mode [Hz]",
+            "Limiting damping [%]",
+            "Limiting mode status",
+            "Damping pairs",
+            "Decision basis",
+            "Note",
+        ))
         for record in self.damping.records:
             value = record.assessment
             dominant, critical = value.dominant_mode, value.critical_mode
-            sheet.append((value.transfer_name, value.pre_fault_power, value.final_power, value.classification, dominant.frequency_hz if dominant else None, dominant.damping_ratio * 100 if dominant and dominant.damping_ratio is not None else None, critical.frequency_hz if critical else None, critical.damping_ratio * 100 if critical and critical.damping_ratio is not None else None, value.warning or value.comment))
+            measurable_modes = tuple(
+                mode for mode in value.modes if mode.damping_ratio is not None
+            )
+            mode_count = len(value.modes)
+            composition = (
+                "No EM mode detected" if not mode_count
+                else "Single EM mode" if mode_count == 1
+                else f"Multi-mode ({mode_count} EM modes)"
+            )
+            sheet.append((
+                value.transfer_name,
+                value.pre_fault_power,
+                value.final_power,
+                value.classification,
+                mode_count,
+                len(measurable_modes),
+                composition,
+                dominant.frequency_hz if dominant else None,
+                dominant.damping_ratio * 100 if dominant and dominant.damping_ratio is not None else None,
+                dominant.classification if dominant else None,
+                critical.frequency_hz if critical else None,
+                critical.damping_ratio * 100 if critical and critical.damping_ratio is not None else None,
+                critical.classification if critical else None,
+                sum(len(mode.damping_pairs) for mode in value.modes),
+                self._damping_decision_basis(value.status),
+                value.warning or value.comment,
+            ))
 
     def _write_modes(self, sheet) -> None:
-        sheet.append(("Transfer", "Candidate", "Frequency [Hz]", "Lower band [Hz]", "Upper band [Hz]", "Spectral power", "Dominant", "Assessment", "Terminal direction", "Terminal damping [%]", "Selected damping [%]", "Selected extremum", "Envelope peak time [s]", "Envelope peak amplitude", "Envelope peak extremum", "Tail pairs", "Terminal sequence pairs", "Consecutive pairs", "Note"))
+        sheet.append(("Transfer", "Candidate", "Frequency [Hz]", "Lower band [Hz]", "Upper band [Hz]", "Spectral power", "Spectral share [%]", "Representative", "Limiting", "Assessment", "Terminal direction", "Terminal damping [%]", "Selected damping [%]", "Selected extremum", "Envelope peak time [s]", "Envelope peak amplitude", "Envelope peak extremum", "Tail pairs", "Terminal sequence pairs", "Consecutive pairs", "Note"))
         for record in self.damping.records:
-            value, dominant = record.assessment, record.assessment.dominant_mode
+            value, dominant, critical = (
+                record.assessment,
+                record.assessment.dominant_mode,
+                record.assessment.critical_mode,
+            )
+            total_spectral_power = sum(
+                mode.spectral_power or 0.0 for mode in value.modes
+            )
             for index, mode in enumerate(value.modes, start=1):
-                sheet.append((value.transfer_name, index, mode.frequency_hz, mode.lower_band_hz, mode.upper_band_hz, mode.spectral_power, mode is dominant, mode.classification, mode.terminal_direction, mode.terminal_pair.damping_ratio * 100 if mode.terminal_pair else None, mode.damping_ratio * 100 if mode.damping_ratio is not None else None, mode.selected_extremum, mode.envelope_peak_time_s, mode.envelope_peak_amplitude, mode.envelope_peak_extremum, mode.tail_pair_count, mode.terminal_sequence_pair_count, len(mode.damping_pairs), mode.message))
+                spectral_share = (
+                    mode.spectral_power / total_spectral_power * 100
+                    if mode.spectral_power is not None and total_spectral_power
+                    else None
+                )
+                sheet.append((value.transfer_name, index, mode.frequency_hz, mode.lower_band_hz, mode.upper_band_hz, mode.spectral_power, spectral_share, mode is dominant, mode is critical, mode.classification, mode.terminal_direction, mode.terminal_pair.damping_ratio * 100 if mode.terminal_pair else None, mode.damping_ratio * 100 if mode.damping_ratio is not None else None, mode.selected_extremum, mode.envelope_peak_time_s, mode.envelope_peak_amplitude, mode.envelope_peak_extremum, mode.tail_pair_count, mode.terminal_sequence_pair_count, len(mode.damping_pairs), mode.message))
 
     def _write_pairs(self, sheet) -> None:
         sheet.append(("Transfer", "Candidate", "Extremum", "Peak 1 time [s]", "Peak 2 time [s]", "A1", "A2", "Period [s]", "Damping [%]", "Peak 1 value", "Peak 2 value"))
@@ -121,6 +199,18 @@ class SingleRunReport:
             for candidate, mode in enumerate(record.assessment.modes, start=1):
                 for pair in mode.damping_pairs:
                     sheet.append((record.assessment.transfer_name, candidate, pair.extremum, pair.first_time_s, pair.second_time_s, pair.first_amplitude, pair.second_amplitude, pair.period_s, pair.damping_ratio * 100, pair.first_value, pair.second_value))
+
+    @staticmethod
+    def _damping_decision_basis(status: str) -> str:
+        """Explain the transfer classification without modifying the calculation."""
+        return {
+            "damped": "Every measurable EM mode meets the 5% damping limit.",
+            "damped_under": "At least one measurable EM mode is below the 5% damping limit.",
+            "growing": "At least one measurable EM mode has non-positive damping.",
+            "not_measurable": "No detected EM mode had two usable consecutive extrema.",
+            "inactive_pre_fault": "Transfer is inactive before the contingency.",
+            "opened": "Transfer is open in the final operating condition.",
+        }[status]
 
     def _write_high_frequency(self, sheet) -> None:
         sheet.append(("Transfer", "Component", "Frequency [Hz]", "Lower band [Hz]", "Upper band [Hz]", "Spectral power", "Status", "Note"))
@@ -152,6 +242,10 @@ class SingleRunReport:
             ("Voltage", "Settlement range limit", voltage.maximum_final_peak_to_peak_relative_range * 100, "%"),
             ("Damping", "EM frequency band", f"{damping.mode_minimum_frequency_hz:.1f}–{damping.mode_maximum_frequency_hz:.1f}", "Hz"),
             ("Damping", "Minimum damping", damping.minimum_damping_ratio * 100, "%"),
+            ("Damping", "Representative EM mode", "Highest detected spectral power", "Descriptive transfer-level mode; it is not a weighted average of damping ratios."),
+            ("Damping", "Limiting EM mode", "Lowest selected damping among measurable modes", "Traceability indicator for the conservative transfer assessment."),
+            ("Damping", "Multi-mode transfer", "Two or more detected EM modes", "Modes remain independently measured; their damping ratios are not averaged."),
+            ("Damping", "Spectral share", "Mode spectral power / total detected EM spectral power", "% within the detected EM modes; used only to identify the representative mode."),
             ("High frequency", "Observation band", f"{self.profile.high_frequency_criteria.minimum_frequency_hz:.1f}–{self.profile.high_frequency_criteria.maximum_frequency_hz:.1f}", "Hz; warning only"),
             ("Angular", "Centre of inertia", "Σ(δᵢHᵢSᵢ) / Σ(HᵢSᵢ)", "calculated per time step"),
             ("Angular", "Machine excursion", "δᵢ − δ_eje", "degrees"),
@@ -176,4 +270,6 @@ class SingleRunReport:
             sheet.column_dimensions[column[0].column_letter].width = width
             for cell in column[1:]:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if isinstance(cell.value, float):
+                    cell.number_format = "0.000"
 

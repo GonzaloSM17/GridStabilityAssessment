@@ -1,7 +1,7 @@
 """Centre-of-inertia angular-excursion calculation shared by all study flows."""
 
 from dataclasses import dataclass
-from math import ceil
+from math import ceil, floor, log10
 from typing import Mapping, Sequence
 
 
@@ -20,6 +20,24 @@ def angular_excursion_limit(excursions: Sequence[Sequence[float]]) -> float:
         default=0.0,
     )
     return float(max(130, ceil(maximum_excursion / 10.0) * 10))
+
+
+def angular_excursion_ticks(limit_degrees: float) -> tuple[float, ...]:
+    """Return symmetric readable ticks that explicitly include both axis bounds."""
+    if limit_degrees <= 0.0:
+        raise ValueError("The angular-excursion limit must be positive.")
+    target_step = limit_degrees / 6.0
+    magnitude = 10.0 ** floor(log10(target_step))
+    candidates = tuple(value * magnitude for value in (1.0, 2.0, 5.0, 10.0))
+    step = min(candidates, key=lambda value: abs(value - target_step))
+    positive_ticks = [0.0]
+    value = step
+    while value < limit_degrees:
+        positive_ticks.append(float(value))
+        value += step
+    if positive_ticks[-1] != limit_degrees:
+        positive_ticks.append(float(limit_degrees))
+    return tuple(-value for value in reversed(positive_ticks[1:])) + tuple(positive_ticks)
 
 
 @dataclass(frozen=True)
