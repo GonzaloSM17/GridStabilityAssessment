@@ -23,36 +23,9 @@ if __name__ == "__main__":
     output_path = None
 
     workbench = SingleRunWorkbench(run_path, scenario, assets_path)
-    if workbench.assets is None:
-        workbench.open_assets()
-    workbench.select_output_directory(output_path)
-    general_result = workbench.create_general_overview()
-    initialization_result = workbench.create_initialization()
-    voltage_result = workbench.create_voltage_stability()
-    damping_result = workbench.create_damping_stability()
-    high_frequency_result = workbench.create_high_frequency()
-    angular_result = workbench.create_angular_stability()
-    spatial_result = workbench.create_spatial_stability(
-        voltage=voltage_result.analysis, damping=damping_result.analysis, angular=angular_result.analysis,
-    )
-    results = (
-        general_result,
-        initialization_result,
-        voltage_result,
-        damping_result,
-        high_frequency_result,
-        angular_result,
-        spatial_result,
-    )
-    for result in results:
+    result = workbench.analyze()
+    for artefact in result.artefact_results:
         print(
-            f"Created {len(result.figure_paths)} figures in {result.output_directory}"
+            f"Created {len(artefact.figure_paths)} figures in {artefact.output_directory}"
         )
-    report_path = workbench.create_report(
-        initialization_result.analysis,
-        voltage_result.analysis,
-        damping_result.analysis,
-        high_frequency_result.analysis,
-        angular_result.analysis,
-    )
-    print(f"Created report at {report_path}")
+    print(f"Created report at {result.report_path}")

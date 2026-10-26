@@ -1,5 +1,6 @@
-"""Manual workbench for generating artefacts from one published simulation run."""
+"""Focused workflow and individual artefacts for one published simulation run."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from data.assets import Assets
@@ -20,6 +21,11 @@ from single_run.initialization import (
     InitializationResult,
     SingleRunInitialization,
 )
+from single_run.plant_recovery import (
+    PlantRecoveryAnalysis,
+    PlantRecoveryResult,
+    SingleRunPlantRecovery,
+)
 from single_run.high_frequency import (
     HighFrequencyAnalysis,
     HighFrequencyResult,
@@ -38,6 +44,33 @@ from stability.scenario import (
     DEFAULT_CONTINGENCY_SCENARIO,
     EvaluationProfile,
 )
+
+
+@dataclass(frozen=True)
+class SingleRunAnalysisResult:
+    """All artefacts and the report produced by the official single-run flow."""
+
+    general: GeneralOverviewResult
+    initialization: InitializationResult
+    voltage: VoltageStabilityResult
+    damping: DampingStabilityResult
+    high_frequency: HighFrequencyResult
+    angular: AngularStabilityResult
+    plant_recovery: PlantRecoveryResult
+    report_path: Path
+
+    @property
+    def artefact_results(self) -> tuple[object, ...]:
+        """Return the created figure-producing artefacts in publication order."""
+        return (
+            self.general,
+            self.initialization,
+            self.voltage,
+            self.damping,
+            self.high_frequency,
+            self.angular,
+            self.plant_recovery,
+        )
 
 
 class SingleRunWorkbench:
@@ -129,6 +162,7 @@ class SingleRunWorkbench:
             output_directory
         )
 
+<<<<<<< HEAD
     def open_assets(self, assets_path: str | Path | None = None) -> Assets:
         """Open explicit Assets or use the existing workbench Excel picker."""
         if assets_path is None:
@@ -151,6 +185,43 @@ class SingleRunWorkbench:
         components = {self.run.display_name: dict(voltage=voltage, damping=damping, angular=angular)}
         return SpatialStabilityAnalyzer(self.assets, self.profile).create(
             (self.run,), output, component_analyses=components,
+=======
+    def create_plant_recovery(self) -> PlantRecoveryResult:
+        """Assess terminal PV, WF, and BESS P/Q recovery under ``05_Plant_Recovery``."""
+        output_directory = self.analysis_output_directory() / "05_Plant_Recovery"
+        return SingleRunPlantRecovery(self.run, self.scenario).create(output_directory)
+
+    def analyze(self) -> SingleRunAnalysisResult:
+        """Run the official focused-analysis sequence and write its report.
+
+        Individual ``create_*`` methods remain public for targeted exploration.
+        This method is the reproducible complete workflow used by the playground.
+        """
+        general = self.create_general_overview()
+        initialization = self.create_initialization()
+        voltage = self.create_voltage_stability()
+        damping = self.create_damping_stability()
+        high_frequency = self.create_high_frequency()
+        angular = self.create_angular_stability()
+        plant_recovery = self.create_plant_recovery()
+        report_path = self.create_report(
+            initialization.analysis,
+            voltage.analysis,
+            damping.analysis,
+            high_frequency.analysis,
+            angular.analysis,
+            plant_recovery.analysis,
+        )
+        return SingleRunAnalysisResult(
+            general=general,
+            initialization=initialization,
+            voltage=voltage,
+            damping=damping,
+            high_frequency=high_frequency,
+            angular=angular,
+            plant_recovery=plant_recovery,
+            report_path=report_path,
+>>>>>>> 7ec7011854dcb7dabbc13131e6c604a089ffccfe
         )
 
     def create_report(
@@ -160,6 +231,7 @@ class SingleRunWorkbench:
         damping: TransferDampingAnalysis,
         high_frequency: HighFrequencyAnalysis,
         angular: AngularStabilityAnalysis,
+        plant_recovery: PlantRecoveryAnalysis,
     ) -> Path:
         """Write the database-style case report at the analysis-output root."""
         return SingleRunReport(
@@ -170,6 +242,7 @@ class SingleRunWorkbench:
             damping,
             high_frequency,
             angular,
+            plant_recovery,
             assess_dynamic_stability(
                 self.run.run_id,
                 self._voltage_status(voltage),
