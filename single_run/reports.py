@@ -7,6 +7,7 @@ from single_run.damping_stability import TransferDampingAnalysis
 from single_run.initialization import InitializationAnalysis
 from single_run.high_frequency import HighFrequencyAnalysis
 from single_run.voltage_stability import VoltageStabilityAnalysis
+from single_run.plant_recovery import PlantRecoveryAnalysis
 from stability.angular import ANGULAR_REFERENCE_NOTE, AngularStabilityAnalysis
 from stability.dynamic_stability import DynamicStabilityAssessment
 from stability.scenario import EvaluationProfile
@@ -15,7 +16,7 @@ from stability.scenario import EvaluationProfile
 class SingleRunReport:
     """Write concise conclusions plus traceable, relational-style details."""
 
-    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, dynamic: DynamicStabilityAssessment) -> None:
+    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, plant_recovery: PlantRecoveryAnalysis, dynamic: DynamicStabilityAssessment) -> None:
         self.run = run
         self.profile = profile
         self.initialization = initialization
@@ -23,6 +24,7 @@ class SingleRunReport:
         self.damping = damping
         self.high_frequency = high_frequency
         self.angular = angular
+        self.plant_recovery = plant_recovery
         self.dynamic = dynamic
 
     def write(self, output_directory: str | Path) -> Path:
@@ -40,6 +42,7 @@ class SingleRunReport:
             "Damping Pairs": workbook.create_sheet("Damping Pairs"),
             "High-Frequency Components": workbook.create_sheet("High-Frequency Components"),
             "Angular Assessment": workbook.create_sheet("Angular Assessment"),
+            "Plant Recovery": workbook.create_sheet("Plant Recovery"),
             "Definitions": workbook.create_sheet("Definitions"),
         }
         sheets["Summary"].title = "Summary"
@@ -51,6 +54,7 @@ class SingleRunReport:
         self._write_pairs(sheets["Damping Pairs"])
         self._write_high_frequency(sheets["High-Frequency Components"])
         self._write_angular(sheets["Angular Assessment"])
+        self._write_plant_recovery(sheets["Plant Recovery"])
         self._write_definitions(sheets["Definitions"])
         for sheet in workbook.worksheets:
             self._format_sheet(sheet)
@@ -78,6 +82,11 @@ class SingleRunReport:
             machine.machine_name
             for machine in self.angular.machines
             if not machine.is_within_limit
+        )
+        plant_recovery_exceptions = self.plant_recovery.non_recovered_records
+        plant_recovery_names = tuple(
+            f"{record.plant_name} ({record.assessment.status})"
+            for record in plant_recovery_exceptions
         )
         sheet.append(("Scope", "Item", "Value", "Detail"))
         rows = (
@@ -108,6 +117,10 @@ class SingleRunReport:
             ("Angular", "Angular stability", "Stable" if self.angular.is_stable else "Unstable", "All machines must remain strictly within ±120°"),
             ("Angular", "Machines within ±120°", sum(machine.is_within_limit for machine in self.angular.machines), None),
             ("Angular", "Violating machines", ", ".join(angular_violations) or "None", "Detailed excursions are in Angular Assessment."),
+            ("Plant recovery", "Assessed PV/WF/BESS plants", len(self.plant_recovery.records), "Complete P/Q signal pairs only."),
+            ("Plant recovery", "Recovered at tmax", len(self.plant_recovery.records) - len(plant_recovery_exceptions), "P and Q both within their terminal tolerance."),
+            ("Plant recovery", "Terminal recovery exceptions", len(plant_recovery_exceptions), "Does not alter the dynamic-stability assessment."),
+            ("Plant recovery", "Plants outside terminal tolerance", ", ".join(plant_recovery_names) or "None", "Detailed P/Q values are in Plant Recovery."),
         )
         for row in rows:
             sheet.append(row)
@@ -227,8 +240,60 @@ class SingleRunReport:
         for machine in self.angular.machines:
             sheet.append((machine.machine_name, machine.signal_name, machine.inertia_s, machine.nominal_power_mva, machine.inertia_weight_mva_s, machine.minimum_excursion_degrees, machine.maximum_excursion_degrees, machine.maximum_absolute_excursion_degrees, machine.first_limit_violation_time_s, machine.is_within_limit))
 
+    def _write_plant_recovery(self, sheet) -> None:
+        """Write terminal P/Q recovery as a compact relational-style table."""
+        sheet.append((
+            "Plant",
+            "Technology",
+            "P signal",
+            "Q signal",
+            "P at 0.5 s [MW]",
+            "P at tmax [MW]",
+            "ΔP [MW]",
+            "Max |ΔP| after evaluation [MW]",
+            "Signed ΔP at max [MW]",
+            "Max P-error time [s]",
+            "P recovered (±5 MW)",
+            "Q at 0.5 s [MVAr]",
+            "Q at tmax [MVAr]",
+            "ΔQ [MVAr]",
+            "Max |ΔQ| after evaluation [MVAr]",
+            "Signed ΔQ at max [MVAr]",
+            "Max Q-error time [s]",
+            "Q recovered (±5 MVAr)",
+            "Evaluation starts [s]",
+            "Final time [s]",
+            "Terminal assessment",
+        ))
+        for record in self.plant_recovery.records:
+            value = record.assessment
+            sheet.append((
+                record.plant_name,
+                record.technology,
+                record.active_power_signal,
+                record.reactive_power_signal,
+                value.pre_fault_active_power_mw,
+                value.final_active_power_mw,
+                value.active_power_error_mw,
+                value.maximum_active_power_absolute_error_mw,
+                value.maximum_active_power_error_mw,
+                value.maximum_active_power_error_time_s,
+                value.is_active_power_recovered,
+                value.pre_fault_reactive_power_mvar,
+                value.final_reactive_power_mvar,
+                value.reactive_power_error_mvar,
+                value.maximum_reactive_power_absolute_error_mvar,
+                value.maximum_reactive_power_error_mvar,
+                value.maximum_reactive_power_error_time_s,
+                value.is_reactive_power_recovered,
+                value.evaluation_start_time_s,
+                value.final_time_s,
+                value.status,
+            ))
+
     def _write_definitions(self, sheet) -> None:
         voltage, damping = self.profile.voltage_criteria, self.profile.transfer_damping_criteria
+        recovery = self.plant_recovery.criteria
         sheet.append(("Scope", "Parameter", "Value", "Unit / meaning"))
         rows = (
             ("Initialization", "Evaluation window", f"{self.initialization.criteria.evaluation_start_time_s:.3f}–{self.initialization.criteria.evaluation_end_time_s:.3f}", "s"),
@@ -247,6 +312,11 @@ class SingleRunReport:
             ("Damping", "Multi-mode transfer", "Two or more detected EM modes", "Modes remain independently measured; their damping ratios are not averaged."),
             ("Damping", "Spectral share", "Mode spectral power / total detected EM spectral power", "% within the detected EM modes; used only to identify the representative mode."),
             ("High frequency", "Observation band", f"{self.profile.high_frequency_criteria.minimum_frequency_hz:.1f}–{self.profile.high_frequency_criteria.maximum_frequency_hz:.1f}", "Hz; warning only"),
+            ("Plant recovery", "Pre-fault reference", recovery.pre_fault_reference_time_s, "s; P and Q operating point"),
+            ("Plant recovery", "Recovery observation starts", f"clearance + {recovery.recovery_evaluation_delay_s:.1f}", "s; all later samples remain visible"),
+            ("Plant recovery", "Terminal active-power tolerance", recovery.active_power_tolerance_mw, "MW at tmax"),
+            ("Plant recovery", "Terminal reactive-power tolerance", recovery.reactive_power_tolerance_mvar, "MVAr at tmax"),
+            ("Plant recovery", "Terminal decision", "P and Q must both recover", "Observation only; does not alter dynamic stability"),
             ("Angular", "Centre of inertia", "Σ(δᵢHᵢSᵢ) / Σ(HᵢSᵢ)", "calculated per time step"),
             ("Angular", "Machine excursion", "δᵢ − δ_eje", "degrees"),
             ("Angular", "Stability criterion", "-120 < Δδᵢ(t) < +120", "strict inequality at every time step and for every machine"),
