@@ -1,5 +1,9 @@
 """Manual entry point for focused analysis of one published simulation run."""
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 from single_run.workbench import SingleRunWorkbench
 from stability.scenario import ContingencyScenario
 
@@ -14,18 +18,23 @@ if __name__ == "__main__":
         clearance_time_s=1.12,
         location="KIMAL_220",
     )
-    assets_path = (
-        r"C:\Users\gonzalo.sanchez\OneDrive - Coordinador Eléctrico Nacional"
-        r"\Projects Repositories\EmtpApplications\EMTP Assets_SEN2026_v0.8.xlsx"
-    )
+    # Select an Assets workbook with emtp_name, MVA, inertia, posX and posY.
+    assets_path = None
+    output_path = None
 
     workbench = SingleRunWorkbench(run_path, scenario, assets_path)
+    if workbench.assets is None:
+        workbench.open_assets()
+    workbench.select_output_directory(output_path)
     general_result = workbench.create_general_overview()
     initialization_result = workbench.create_initialization()
     voltage_result = workbench.create_voltage_stability()
     damping_result = workbench.create_damping_stability()
     high_frequency_result = workbench.create_high_frequency()
     angular_result = workbench.create_angular_stability()
+    spatial_result = workbench.create_spatial_stability(
+        voltage=voltage_result.analysis, damping=damping_result.analysis, angular=angular_result.analysis,
+    )
     results = (
         general_result,
         initialization_result,
@@ -33,6 +42,7 @@ if __name__ == "__main__":
         damping_result,
         high_frequency_result,
         angular_result,
+        spatial_result,
     )
     for result in results:
         print(

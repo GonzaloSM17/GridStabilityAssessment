@@ -26,6 +26,8 @@ class MonteCarloWorkbench:
         scenario: ContingencyScenario | None = None,
         profile: EvaluationProfile | None = None,
     ) -> None:
+        self._output_directory: Path | None = None
+        self._show_figures = False
         self.study: MonteCarloStudy | None = None
         self._pipeline: AnalysisPipeline | None = None
         self.dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
@@ -98,12 +100,18 @@ class MonteCarloWorkbench:
             raise RuntimeError("Assets workbook selection was cancelled.")
         return Path(selected_path)
 
+    def select_output_directory(self, output_directory: str | Path | None = None) -> Path:
+        """Choose the common destination before generating any analysis output."""
+        from utils.output_directory import select_output_directory
+        self._output_directory = select_output_directory(output_directory)
+        return self._output_directory
+
     def analysis_output_directory(self) -> Path:
         """Return the active study directory for generated analysis artefacts."""
         if self.study is None or self.study.context.context_path is None:
             raise RuntimeError("Open a study before requesting an output directory.")
 
-        output_directory = self.study.context.context_path / "analysis_outputs"
+        output_directory = self._output_directory if self._output_directory is not None else self.study.context.context_path / "analysis_outputs"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 
@@ -111,7 +119,7 @@ class MonteCarloWorkbench:
         self,
         *,
         buses: tuple[str, ...],
-        show_figures: bool = True,
+        show_figures: bool = False,
     ) -> StudyAnalysis:
         """Analyze selected buses, publish local artefacts, and return their result."""
         if self.study is None:
@@ -121,6 +129,7 @@ class MonteCarloWorkbench:
         if len(buses) != len(set(buses)):
             raise ValueError("A bus may be selected only once.")
 
+        self._show_figures = show_figures
         bus_analyses = tuple(
             BusStudyAnalysis(
                 bus_name=bus_name,
@@ -179,16 +188,32 @@ class MonteCarloWorkbench:
 
             plt.show()
 
+        self._show_figures = False
         return study_analysis
+
+    def create_spatial_stability(self, *, output_directory: str | Path | None = None):
+        """Create population maps with voltage, damping AND angular assessment per run.
+
+        This dedicated result does not relabel the existing batch reports, whose
+        legacy dynamic decision currently omits the angular criterion.
+        """
+        from montecarlo.spatial_stability import SpatialStabilityAnalyzer
+        if self.study is None:
+            raise RuntimeError("Open a study before starting spatial analysis.")
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "spatial_stability"
+        return SpatialStabilityAnalyzer(self.study.assets, self.pipeline.profile).create(
+            self.study.context.runs, output,
+        )
 
     def plot_power_transfers(
         self,
         *,
         start_time_s: float = 0.9,
         end_time_s: float | None = None,
-        show_figure: bool = True,
+        show_figure: bool = False,
     ) -> Path:
         """Calculate and publish active-power transfer modal-damping figures."""
+        self._show_figures = show_figure
         transfer_analysis = self.pipeline.analyze_power_transfers()
         high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
         output_paths = self._publish_transfer_analysis(
@@ -201,6 +226,7 @@ class MonteCarloWorkbench:
             import matplotlib.pyplot as plt
 
             plt.show()
+        self._show_figures = False
         return output_paths[0]
 
     def _publish_transfer_analysis(
@@ -370,11 +396,15 @@ class MonteCarloWorkbench:
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 
-    @staticmethod
-    def save_figure(figure, output_directory: Path, filename: str) -> Path:
-        """Save one figure using the selected stable filename."""
+    def save_figure(self, figure, output_directory: Path, filename: str) -> Path:
+        """Save and release the figure unless interactive display was requested."""
         output_path = output_directory / filename
-        figure.savefig(output_path, dpi=150)
+        try:
+            figure.savefig(output_path, dpi=150)
+        finally:
+            if not self._show_figures:
+                import matplotlib.pyplot as plt
+                plt.close(figure)
         return output_path
 
     def _save_controller_indicator_figures(

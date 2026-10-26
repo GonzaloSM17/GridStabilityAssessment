@@ -49,6 +49,7 @@ class SingleRunWorkbench:
         scenario: ContingencyScenario | None = None,
         assets_path: str | Path | None = None,
     ) -> None:
+        self._output_directory: Path | None = None
         self.scenario = scenario or DEFAULT_CONTINGENCY_SCENARIO
         self.profile = EvaluationProfile.for_scenario(self.scenario)
         self.run = self.open_run(run_path)
@@ -63,9 +64,15 @@ class SingleRunWorkbench:
             allow_non_monte_carlo_name=True,
         )
 
+    def select_output_directory(self, output_directory: str | Path | None = None) -> Path:
+        """Choose the common destination before generating any analysis output."""
+        from utils.output_directory import select_output_directory
+        self._output_directory = select_output_directory(output_directory)
+        return self._output_directory
+
     def analysis_output_directory(self) -> Path:
         """Return the run-local directory for all focused analysis artefacts."""
-        output_directory = self.run.run_path / "analysis_outputs"
+        output_directory = self._output_directory if self._output_directory is not None else self.run.run_path / "analysis_outputs"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 
@@ -120,6 +127,30 @@ class SingleRunWorkbench:
         output_directory = self.analysis_output_directory() / "04_Angular_Stability"
         return SingleRunAngularStability(self.run, self.scenario, self.assets).create(
             output_directory
+        )
+
+    def open_assets(self, assets_path: str | Path | None = None) -> Assets:
+        """Open explicit Assets or use the existing workbench Excel picker."""
+        if assets_path is None:
+            from montecarlo.workbench import MonteCarloWorkbench
+            assets_path = MonteCarloWorkbench._choose_assets_path()
+        self.assets = Assets(assets_path)
+        return self.assets
+
+    def create_spatial_stability(
+        self, *, output_directory: str | Path | None = None,
+        voltage: VoltageStabilityAnalysis | None = None,
+        damping: TransferDampingAnalysis | None = None,
+        angular: AngularStabilityAnalysis | None = None,
+    ):
+        """Create xi/fn maps using native dynamic stability, optionally reusing analyses."""
+        from montecarlo.spatial_stability import SpatialStabilityAnalyzer
+        if self.assets is None:
+            self.open_assets()
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "05_Spatial_Stability"
+        components = {self.run.display_name: dict(voltage=voltage, damping=damping, angular=angular)}
+        return SpatialStabilityAnalyzer(self.assets, self.profile).create(
+            (self.run,), output, component_analyses=components,
         )
 
     def create_report(

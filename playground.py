@@ -1,15 +1,20 @@
 """Manual place for selecting and running one Monte Carlo study analysis."""
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 from montecarlo.workbench import MonteCarloWorkbench
 from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
-    # Set either path to None to select it with a dialog.
+    # Set input/output paths to None to select them with dialogs.
     context_path = None
     assets_path = (
-        r"C:\Users\gonzalo.sanchez\OneDrive - Coordinador Eléctrico Nacional"
-        r"\Projects Repositories\EmtpApplications\EMTP Assets_SEN2026_v0.8.xlsx"
+        r"C:\Users\kelly.allendes\Downloads"
+        r"\Assets_Coordenates\EMTP Assets_v2026.xlsx"
     )
+    output_path = None
     buses = ("KIMAL_220",)
     scenario = ContingencyScenario(
         name="KIMAL CC-2PH-G",
@@ -21,4 +26,11 @@ if __name__ == "__main__":
     )
 
     workbench = MonteCarloWorkbench(context_path, assets_path, scenario)
-    workbench.analyze(buses=buses)
+    workbench.select_output_directory(output_path)
+    # Save outputs without opening interactive figure windows.
+    workbench.analyze(buses=buses, show_figures=False)
+    spatial_result = workbench.create_spatial_stability()
+    print(
+        f"Created {len(spatial_result.figure_paths)} spatial maps in "
+        f"{spatial_result.output_directory}"
+    )
