@@ -200,7 +200,7 @@ class MonteCarloWorkbench:
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.study is None:
             raise RuntimeError("Open a study before starting spatial analysis.")
-        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "spatial_stability"
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
         return SpatialStabilityAnalyzer(self.study.assets, self.pipeline.profile).create(
             self.study.context.runs, output,
         )

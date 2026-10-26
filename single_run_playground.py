@@ -23,9 +23,16 @@ if __name__ == "__main__":
     output_path = None
 
     workbench = SingleRunWorkbench(run_path, scenario, assets_path)
+    if workbench.assets is None:
+        workbench.open_assets()
+    workbench.select_output_directory(output_path)
     result = workbench.analyze()
     for artefact in result.artefact_results:
         print(
             f"Created {len(artefact.figure_paths)} figures in {artefact.output_directory}"
         )
+    spatial_result = workbench.create_spatial_stability(
+        voltage=result.voltage.analysis, damping=result.damping.analysis, angular=result.angular.analysis,
+    )
+    print(f"Created {len(spatial_result.figure_paths)} spatial maps in {spatial_result.output_directory}")
     print(f"Created report at {result.report_path}")

@@ -41,7 +41,7 @@ spatial_result = workbench.create_spatial_stability(
 )
 ```
 
-Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas a `05_Spatial_Stability/`; en `playground.py`, los mapas van a `spatial_stability/`. El modo espacial independiente guarda `xi_maps/` y `fn_maps/` directamente dentro de la carpeta seleccionada o indicada por `--output`. Las llamadas directas al workbench conservan la ruta anterior `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
+Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas a `04_spatial_stability/`; en `playground.py`, los mapas van a `spatial_stability/`. El modo espacial independiente tambien crea `04_spatial_stability/` dentro de la carpeta seleccionada o indicada por `--output`. Las llamadas directas al workbench conservan la ruta anterior `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
 
 ## Datos y criterio
 
@@ -57,8 +57,8 @@ Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_ru
 ```
 xi_maps/by_case/xi_map_run_000001.png
 fn_maps/by_case/fn_map_run_000001.png
-xi_maps/by_stability/dynamic/stable/xi_mean_map.png
-fn_maps/by_stability/dynamic/unstable/fn_mean_map.png
+xi_maps/by_stability/stable/xi_mean_map.png
+fn_maps/by_stability/unstable/fn_mean_map.png
 ```
 
 Solo PNG, sin subcarpetas por caso, tablas laterales o identificadores. Color por xi o bandas de fn [0,2), [2,5), [5,10), [10,20), >=20 Hz. Area del punto proporcional a MVA. Las escalas son comunes a todo el estudio. No se fuerzan distancias geograficas: posX/posY son posiciones del esquema.
@@ -77,4 +77,10 @@ Incluye pruebas de conversion Hz/xi, equivalencias de nombres, unidades repetida
 
 ## Playground para multiples simulaciones
 
-`python playground.py` ejecuta los analisis habituales y despues `workbench.create_spatial_stability()`. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; solo se muestra el resumen final. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/spatial_stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
+`python playground.py` ejecuta los analisis habituales y despues `workbench.create_spatial_stability()`. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; solo se muestra el resumen final. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/04_spatial_stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
+
+## Auditoria de promedios por estabilidad
+
+La estructura es `04_spatial_stability/{xi_maps|fn_maps}/by_stability/{stable|unstable}/`, sin nivel dynamic intermedio. Si hay casos no evaluados, se conservan separados en not_evaluated; no se mezclan con estables. `cases.csv` enumera las corridas incluidas y sus tres resultados de criterio. `device_class_comparison.csv` presenta los dos promedios por unidad y sus diferencias. `spatial_metadata.json` registra la pertenencia exacta de cada grupo.
+
+Los mapas xi agrupados usan una escala comun calculada con los promedios de los grupos; los mapas individuales conservan su escala comun por corrida. Los mapas fn mantienen las bandas fijas elegidas: valores numericos diferentes dentro de la misma banda tienen el mismo color. No se altera la clasificacion dinamica ni se cambia de banda para forzar diferencias visuales.

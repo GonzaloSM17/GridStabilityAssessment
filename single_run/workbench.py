@@ -162,7 +162,6 @@ class SingleRunWorkbench:
             output_directory
         )
 
-<<<<<<< HEAD
     def open_assets(self, assets_path: str | Path | None = None) -> Assets:
         """Open explicit Assets or use the existing workbench Excel picker."""
         if assets_path is None:
@@ -181,11 +180,12 @@ class SingleRunWorkbench:
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.assets is None:
             self.open_assets()
-        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "05_Spatial_Stability"
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
         components = {self.run.display_name: dict(voltage=voltage, damping=damping, angular=angular)}
         return SpatialStabilityAnalyzer(self.assets, self.profile).create(
             (self.run,), output, component_analyses=components,
-=======
+        )
+
     def create_plant_recovery(self) -> PlantRecoveryResult:
         """Assess terminal PV, WF, and BESS P/Q recovery under ``05_Plant_Recovery``."""
         output_directory = self.analysis_output_directory() / "05_Plant_Recovery"
@@ -221,7 +221,6 @@ class SingleRunWorkbench:
             angular=angular,
             plant_recovery=plant_recovery,
             report_path=report_path,
->>>>>>> 7ec7011854dcb7dabbc13131e6c604a089ffccfe
         )
 
     def create_report(

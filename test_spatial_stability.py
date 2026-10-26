@@ -163,7 +163,7 @@ class SpatialStabilityTests(unittest.TestCase):
         c=components()
         with patch("single_run.voltage_stability.SingleRunVoltageStability.analyze",side_effect=AssertionError("Unexpected reanalysis")):
             result=workbench.create_spatial_stability(output_directory=self.root/"out",**c)
-        self.assertEqual(len(result.figure_paths),8)
+        self.assertEqual(len(result.figure_paths),6)
         self.assertTrue(all(p.is_file() and p.suffix==".png" for p in result.figure_paths))
         self.assertFalse(list(result.output_directory.rglob("*.svg")))
         self.assertTrue((result.output_directory/"fn_maps/by_case/fn_map_run_000001.png").is_file())
@@ -179,17 +179,36 @@ class SpatialStabilityTests(unittest.TestCase):
         study_path.mkdir();(study_path/"manifest.json").write_text("{}")
         for i in (1,2):
             folder=study_path/"runs"/f"run_{i:06d}"
-            write_parameters(folder);write_parquet(folder,angular_unstable=(i==2))
+            rows=[dict(GeneratorName="BESS_A",InService=1,Kp=10.*i,Ki=100.*i*i,UnitId=1),
+                  dict(GeneratorName="PFV_LA_HUAYCA_II",InService=1,Kp=30.*i,Ki=300.,UnitId=2)]
+            write_parameters(folder,rows);write_parquet(folder,angular_unstable=(i==2))
         with patch.object(MonteCarloWorkbench,"_choose_context_path",return_value=study_path) as context_picker, patch.object(MonteCarloWorkbench,"_choose_assets_path",return_value=self.assets.workbook_path) as assets_picker:
             workbench=MonteCarloWorkbench()
         context_picker.assert_called_once_with();assets_picker.assert_called_once_with()
         result=workbench.create_spatial_stability()
-        self.assertEqual(result.output_directory,(study_path/"analysis_outputs/spatial_stability").resolve())
-        self.assertEqual(len(result.figure_paths),10)
+        self.assertEqual(result.output_directory,(study_path/"analysis_outputs/04_spatial_stability").resolve())
+        self.assertEqual(len(result.figure_paths),8)
         self.assertEqual([case.assessment.status for case in result.analysis.cases],["Stable","Unstable"])
         metadata=json.loads((result.output_directory/"spatial_metadata.json").read_text())
         self.assertEqual(metadata["counts"],{"Stable":1,"Unstable":1,"Not evaluated":0})
         self.assertTrue(all(p.is_file() for p in result.figure_paths))
+        stable=result.output_directory/"xi_maps/by_stability/stable"
+        unstable=result.output_directory/"xi_maps/by_stability/unstable"
+        self.assertTrue((stable/"xi_mean_map.png").is_file())
+        self.assertTrue((unstable/"xi_mean_map.png").is_file())
+        self.assertFalse((stable.parent/"dynamic").exists())
+        def read_rows(path):
+            with path.open(encoding="utf-8-sig",newline="") as stream:return list(csv.DictReader(stream))
+        self.assertEqual([r["case_id"] for r in read_rows(stable/"cases.csv")],["run_000001"])
+        self.assertEqual([r["case_id"] for r in read_rows(unstable/"cases.csv")],["run_000002"])
+        a={r["device_id"]:r for r in read_rows(stable/"device_means.csv")}
+        b={r["device_id"]:r for r in read_rows(unstable/"device_means.csv")}
+        key="PFV_LA_HUAYCA_II::UnitId=2"
+        self.assertAlmostEqual(float(b[key]["mean_xi"]),2*float(a[key]["mean_xi"]))
+        self.assertEqual(metadata["group_membership"]["Stable"],["run_000001"])
+        self.assertEqual(metadata["group_membership"]["Unstable"],["run_000002"])
+        comparison=read_rows(result.output_directory/"device_class_comparison.csv")
+        self.assertTrue(any(abs(float(r["delta_xi_unstable_minus_stable"]))>0 for r in comparison))
 
     def test_spatial_analysis_does_not_print_per_run_progress(self):
         run=write_parameters(self.root/"run_000001")
