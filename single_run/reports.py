@@ -300,7 +300,7 @@ class SingleRunReport:
         """Record the optional spatial-map outcome without relabelling stability."""
         sheet.append(("Item", "Value", "Detail"))
         sheet.append(("Map generation", self.spatial_stability.status, self.spatial_stability.reason))
-        sheet.append(("Generated maps", len(self.spatial_stability.figure_paths), self.spatial_stability.output_directory))
+        sheet.append(("Generated maps", len(self.spatial_stability.figure_paths), str(self.spatial_stability.output_directory)))
         analysis = self.spatial_stability.analysis
         if analysis is not None and analysis.skipped_runs:
             sheet.append(("Run", "Spatial status", "Reason"))

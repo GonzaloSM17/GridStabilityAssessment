@@ -49,9 +49,9 @@ class AnalysisReport:
         if self.scenario is not None:
             scenario_sheet = workbook.create_sheet("Scenario")
         if self.transfer_analysis is not None:
-            transfer_assessments_sheet = workbook.create_sheet("Active-Power Transfer Assessments")
+            transfer_assessments_sheet = workbook.create_sheet("Transfer Assessments")
             transfer_modes_sheet = workbook.create_sheet("Electromechanical Modes")
-            damping_pairs_sheet = workbook.create_sheet("Active-Power Transfer Damping Pairs")
+            damping_pairs_sheet = workbook.create_sheet("Transfer Damping Pairs")
         if self.high_frequency_analysis is not None:
             high_frequency_sheet = workbook.create_sheet("High-Frequency Components")
         if self.spatial_stability is not None:
@@ -327,7 +327,7 @@ class AnalysisReport:
         result = self.spatial_stability
         sheet.append(("Item", "Value", "Detail"))
         sheet.append(("Map generation", result.status, result.reason))
-        sheet.append(("Generated maps", len(result.figure_paths), result.output_directory))
+        sheet.append(("Generated maps", len(result.figure_paths), str(result.output_directory)))
         analysis = result.analysis
         if analysis is not None:
             sheet.append(("Mapped controller points", len(analysis.points), None))
