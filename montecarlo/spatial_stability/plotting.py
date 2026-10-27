@@ -105,7 +105,8 @@ def export_maps(analysis, output_directory, assets, profile, runs):
     if not points: raise ValueError("No spatial controller points to export")
     if len({case.case_id for case in cases}) != len(cases): raise ValueError("Duplicate case assessment")
     case_map = {case.case_id: case for case in cases}
-    if set(p.case_id for p in points) != set(case_map): raise ValueError("Controller/assessment case mismatch")
+    mapped_case_ids = {point.case_id for point in points}
+    if not mapped_case_ids.issubset(case_map): raise ValueError("Controller/assessment case mismatch")
     for case in cases:
         if case.assessment.status not in STATUS_DIRECTORIES: raise ValueError("Unknown dynamic-stability status")
         if case.assessment.angular_status is None: raise ValueError("Spatial labels require the angular criterion")
@@ -130,18 +131,22 @@ def export_maps(analysis, output_directory, assets, profile, runs):
     point_rows = [asdict(p) for p in points]
     _write_csv(out/"device_case_parameters.csv", point_rows, list(point_rows[0]))
     _write_csv(out/"excluded_devices.csv", list(analysis.excluded_devices), ["case_id","generator_name","reason"])
+    skipped_by_case = {item.case_id: item.reason for item in analysis.skipped_runs}
     case_rows = []
     for case in cases:
         selected = tuple(p for p in points if p.case_id == case.case_id)
         row = dict(case_id=case.case_id, **asdict(case.assessment), diagnostics="; ".join(case.diagnostics),
+                   spatial_status="Mapped" if selected else "Skipped",
+                   spatial_reason=skipped_by_case.get(case.case_id),
                    n_devices=len(selected), included_mva=sum(p.nominal_power_mva for p in selected),
                    weighted_xi=weighted_value(selected,"xi"), weighted_fn_hz=weighted_value(selected,"fn_hz"))
         case_rows.append(row)
     _write_csv(out/"case_assessments.csv", case_rows, list(case_rows[0]))
     # Build each class from its own case IDs, once, and retain the membership for auditing.
     groups = {}
+    mapped_cases = tuple(case for case in cases if case.case_id in mapped_case_ids)
     for status in STATUS_DIRECTORIES:
-        ids = {case.case_id for case in cases if case.assessment.status == status}
+        ids = {case.case_id for case in mapped_cases if case.assessment.status == status}
         averages, rows = mean_points(points, ids)
         groups[status] = (ids, averages, rows)
     group_xi = [point.xi for _, averages, _ in groups.values() for point in averages]
@@ -169,7 +174,7 @@ def export_maps(analysis, output_directory, assets, profile, runs):
     for metric, folder_name, prefix in (("xi","xi_maps","xi"),("fn_hz","fn_maps","fn")):
         directory = out/folder_name
         (directory/"by_case").mkdir(parents=True, exist_ok=True)
-        for case in cases:
+        for case in mapped_cases:
             selected = tuple(p for p in points if p.case_id == case.case_id)
             row = next(row for row in case_rows if row["case_id"] == case.case_id)
             value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
@@ -209,7 +214,9 @@ def export_maps(analysis, output_directory, assets, profile, runs):
                     run_paths=[str(run.run_path) for run in runs], profile=asdict(profile),
                     criterion="stability.dynamic_stability.assess_dynamic_stability with voltage, modal damping and angular status",
                     counts={status:sum(c.assessment.status==status for c in cases) for status in STATUS_DIRECTORIES},
-                    cases=len(cases),devices=len(unique),points=len(points),excluded_devices=len(analysis.excluded_devices),
+                    mapped_counts={status:sum(c.assessment.status==status for c in mapped_cases) for status in STATUS_DIRECTORIES},
+                    cases=len(cases),mapped_cases=len(mapped_cases),devices=len(unique),points=len(points),excluded_devices=len(analysis.excluded_devices),
+                    skipped_runs=[asdict(item) for item in analysis.skipped_runs],
                     xi_formula="Kp/(2*sqrt(Ki))",fn_formula_hz="sqrt(Ki)/(2*pi)",frequency_bands=FN_LABELS,
                     frequency_boundary_rule="lower inclusive, upper exclusive; final band >=20 Hz",
                     xi_color_limits=[lo,hi],xi_group_color_limits=list(group_limits),position_bounds=bounds,marker_area_per_mva=size_factor,

@@ -210,6 +210,7 @@ class ControllerStudyAnalysis:
     controller_points: tuple[ControllerPoint, ...]
     weighted_run_points: tuple[WeightedControllerPoint, ...]
     skipped_run_ids: tuple[int, ...]
+    skipped_run_reasons: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -437,12 +438,14 @@ class AnalysisPipeline:
         controller_points: list[ControllerPoint] = []
         weighted_run_points: list[WeightedControllerPoint] = []
         skipped_run_ids: list[int] = []
+        skipped_run_reasons: list[tuple[int, str]] = []
 
         for run in self.context.runs:
             try:
                 controllers = run.read_active_controller_parameters(self.assets)
-            except (FileNotFoundError, KeyError, ValueError):
+            except (FileNotFoundError, KeyError, ValueError) as error:
                 skipped_run_ids.append(run.run_id)
+                skipped_run_reasons.append((run.run_id, str(error)))
                 continue
 
             total_nominal_power_mva = sum(
@@ -481,6 +484,7 @@ class AnalysisPipeline:
             controller_points=tuple(controller_points),
             weighted_run_points=tuple(weighted_run_points),
             skipped_run_ids=tuple(skipped_run_ids),
+            skipped_run_reasons=tuple(skipped_run_reasons),
         )
 
     def analyze_power_transfers(

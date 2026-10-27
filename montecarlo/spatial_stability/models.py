@@ -32,10 +32,21 @@ class SpatialStabilityAnalysis:
     points: tuple[SpatialControllerPoint, ...]
     cases: tuple[SpatialCaseAssessment, ...]
     excluded_devices: tuple[dict, ...] = ()
+    skipped_runs: tuple["SpatialSkippedRun", ...] = ()
+
+
+@dataclass(frozen=True)
+class SpatialSkippedRun:
+    """One run omitted from spatial maps without invalidating other analyses."""
+
+    case_id: str
+    reason: str
 
 
 @dataclass(frozen=True)
 class SpatialStabilityResult:
     output_directory: Path
-    analysis: SpatialStabilityAnalysis
+    analysis: SpatialStabilityAnalysis | None
     figure_paths: tuple[Path, ...]
+    status: str = "Completed"
+    reason: str | None = None

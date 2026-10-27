@@ -31,8 +31,9 @@ if __name__ == "__main__":
         print(
             f"Created {len(artefact.figure_paths)} figures in {artefact.output_directory}"
         )
-    spatial_result = workbench.create_spatial_stability(
-        voltage=result.voltage.analysis, damping=result.damping.analysis, angular=result.angular.analysis,
+    print(
+        f"Spatial stability: {result.spatial.status}; "
+        f"{len(result.spatial.figure_paths)} map(s) in "
+        f"{result.spatial.output_directory}"
     )
-    print(f"Created {len(spatial_result.figure_paths)} spatial maps in {spatial_result.output_directory}")
     print(f"Created report at {result.report_path}")

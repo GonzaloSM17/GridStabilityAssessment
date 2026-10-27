@@ -133,6 +133,45 @@ class SpatialStabilityTests(unittest.TestCase):
         self.assertEqual(result.cases[0].assessment.status,"Not evaluated")
         self.assertEqual(len(result.cases[0].diagnostics),3)
 
+    def test_spatial_metadata_failure_is_recorded_without_stopping_the_result(self):
+        run_directory = self.root / "run_000001"
+        run_directory.mkdir()
+        run = MonteCarloRun.from_directory(run_directory)
+
+        result = SpatialStabilityAnalyzer.create_optional(
+            self.assets,
+            self.profile,
+            (run,),
+            self.root / "spatial_output",
+        )
+
+        self.assertEqual(result.status, "Skipped")
+        self.assertFalse(result.figure_paths)
+        self.assertIn("parameters.csv", result.reason)
+        self.assertFalse(result.output_directory.exists())
+
+    def test_spatial_maps_continue_with_usable_runs_when_one_run_lacks_parameters(self):
+        valid_directory = self.root / "run_000001"
+        valid_run = write_parameters(valid_directory)
+        write_parquet(valid_directory)
+        invalid_directory = self.root / "run_000002"
+        invalid_directory.mkdir()
+        invalid_run = MonteCarloRun.from_directory(invalid_directory)
+
+        result = SpatialStabilityAnalyzer.create_optional(
+            self.assets,
+            self.profile,
+            (valid_run, invalid_run),
+            self.root / "spatial_output",
+        )
+
+        self.assertEqual(result.status, "Completed with warnings")
+        self.assertTrue(result.figure_paths)
+        self.assertEqual(
+            tuple(item.case_id for item in result.analysis.skipped_runs),
+            ("run_000002",),
+        )
+
     def test_mean_fn_is_mean_of_frequencies_not_frequency_of_mean_gain(self):
         run=write_parameters(self.root/"run_000001")
         points,_=read_controller_points(run,SpatialAssetLookup(self.assets))

@@ -44,6 +44,7 @@ from stability.scenario import (
     DEFAULT_CONTINGENCY_SCENARIO,
     EvaluationProfile,
 )
+from utils.analysis_logging import configure_analysis_logger
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class SingleRunAnalysisResult:
     high_frequency: HighFrequencyResult
     angular: AngularStabilityResult
     plant_recovery: PlantRecoveryResult
+    spatial: object
     report_path: Path
 
     @property
@@ -70,6 +72,7 @@ class SingleRunAnalysisResult:
             self.high_frequency,
             self.angular,
             self.plant_recovery,
+            self.spatial,
         )
 
 
@@ -83,6 +86,7 @@ class SingleRunWorkbench:
         assets_path: str | Path | None = None,
     ) -> None:
         self._output_directory: Path | None = None
+        self._logger = None
         self.scenario = scenario or DEFAULT_CONTINGENCY_SCENARIO
         self.profile = EvaluationProfile.for_scenario(self.scenario)
         self.run = self.open_run(run_path)
@@ -101,6 +105,8 @@ class SingleRunWorkbench:
         """Choose the common destination before generating any analysis output."""
         from utils.output_directory import select_output_directory
         self._output_directory = select_output_directory(output_directory)
+        self._logger = None
+        self._analysis_logger().info("Output directory selected: %s", self._output_directory)
         return self._output_directory
 
     def analysis_output_directory(self) -> Path:
@@ -108,6 +114,14 @@ class SingleRunWorkbench:
         output_directory = self._output_directory if self._output_directory is not None else self.run.run_path / "analysis_outputs"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
+
+    def _analysis_logger(self):
+        if self._logger is None:
+            self._logger = configure_analysis_logger(
+                self.analysis_output_directory(),
+                "single_run",
+            )
+        return self._logger
 
     def create_general_overview(self) -> GeneralOverviewResult:
         """Create the fixed system-wide overview under ``00_General``."""
@@ -180,11 +194,28 @@ class SingleRunWorkbench:
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.assets is None:
             self.open_assets()
-        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "06_Spatial_Stability"
         components = {self.run.display_name: dict(voltage=voltage, damping=damping, angular=angular)}
-        return SpatialStabilityAnalyzer(self.assets, self.profile).create(
-            (self.run,), output, component_analyses=components,
+        result = SpatialStabilityAnalyzer.create_optional(
+            self.assets,
+            self.profile,
+            (self.run,),
+            output,
+            component_analyses=components,
         )
+        logger = self._analysis_logger()
+        if result.analysis is not None:
+            for item in result.analysis.skipped_runs:
+                logger.warning("Spatial stability skipped %s: %s", item.case_id, item.reason)
+        if result.status == "Skipped":
+            logger.warning("Spatial stability skipped: %s", result.reason)
+        else:
+            logger.info(
+                "Spatial stability %s: %d map(s)",
+                result.status.lower(),
+                len(result.figure_paths),
+            )
+        return result
 
     def create_plant_recovery(self) -> PlantRecoveryResult:
         """Assess terminal PV, WF, and BESS P/Q recovery under ``05_Plant_Recovery``."""
@@ -197,13 +228,35 @@ class SingleRunWorkbench:
         Individual ``create_*`` methods remain public for targeted exploration.
         This method is the reproducible complete workflow used by the playground.
         """
+        logger = self._analysis_logger()
+        logger.info("Starting single-run analysis: %s", self.run.display_name)
+        logger.info("Starting general overview")
         general = self.create_general_overview()
+        logger.info("General overview completed")
+        logger.info("Starting initialization assessment")
         initialization = self.create_initialization()
+        logger.info("Initialization assessment completed")
+        logger.info("Starting voltage stability")
         voltage = self.create_voltage_stability()
+        logger.info("Voltage stability completed")
+        logger.info("Starting damping stability")
         damping = self.create_damping_stability()
+        logger.info("Damping stability completed")
+        logger.info("Starting high-frequency observation")
         high_frequency = self.create_high_frequency()
+        logger.info("High-frequency observation completed")
+        logger.info("Starting angular stability")
         angular = self.create_angular_stability()
+        logger.info("Angular stability completed")
+        logger.info("Starting plant recovery")
         plant_recovery = self.create_plant_recovery()
+        logger.info("Plant recovery completed")
+        logger.info("Starting spatial stability")
+        spatial = self.create_spatial_stability(
+            voltage=voltage.analysis,
+            damping=damping.analysis,
+            angular=angular.analysis,
+        )
         report_path = self.create_report(
             initialization.analysis,
             voltage.analysis,
@@ -211,7 +264,10 @@ class SingleRunWorkbench:
             high_frequency.analysis,
             angular.analysis,
             plant_recovery.analysis,
+            spatial,
         )
+        logger.info("Analysis report created")
+        logger.info("Single-run analysis completed")
         return SingleRunAnalysisResult(
             general=general,
             initialization=initialization,
@@ -220,6 +276,7 @@ class SingleRunWorkbench:
             high_frequency=high_frequency,
             angular=angular,
             plant_recovery=plant_recovery,
+            spatial=spatial,
             report_path=report_path,
         )
 
@@ -231,6 +288,7 @@ class SingleRunWorkbench:
         high_frequency: HighFrequencyAnalysis,
         angular: AngularStabilityAnalysis,
         plant_recovery: PlantRecoveryAnalysis,
+        spatial_stability,
     ) -> Path:
         """Write the database-style case report at the analysis-output root."""
         return SingleRunReport(
@@ -242,6 +300,7 @@ class SingleRunWorkbench:
             high_frequency,
             angular,
             plant_recovery,
+            spatial_stability,
             assess_dynamic_stability(
                 self.run.run_id,
                 self._voltage_status(voltage),

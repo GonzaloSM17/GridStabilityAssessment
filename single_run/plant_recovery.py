@@ -14,7 +14,6 @@ from stability.plant_recovery import (
 from stability.plotting import close_y_axis
 from stability.scenario import ContingencyScenario
 
-
 PLANT_TYPES = (
     ("PV", "PFV"),
     ("WF", "PE"),
@@ -49,7 +48,9 @@ class PlantRecoveryAnalysis:
     @property
     def non_recovered_records(self) -> tuple[PlantRecoveryRecord, ...]:
         """Return only plants outside either terminal recovery tolerance."""
-        return tuple(record for record in self.records if not record.assessment.is_recovered)
+        return tuple(
+            record for record in self.records if not record.assessment.is_recovered
+        )
 
 
 @dataclass(frozen=True)
@@ -153,8 +154,7 @@ class SingleRunPlantRecovery:
         figure, axes = plt.subplots(2, 1, figsize=(13.2, 8.0), sharex=True)
         maximum_time_s = self.run.dataset.maximum_time_s()
         evaluation_start_time_s = (
-            self.scenario.clearance_time_s
-            + self.criteria.recovery_evaluation_delay_s
+            self.scenario.clearance_time_s + self.criteria.recovery_evaluation_delay_s
         )
         for axis in axes:
             self._draw_event_windows(axis, evaluation_start_time_s)
@@ -222,7 +222,9 @@ class SingleRunPlantRecovery:
                 close_y_axis(axis)
 
         axes[0].set(title="Active Power", ylabel="Active power (MW)")
-        axes[1].set(title="Reactive Power", xlabel="Time (s)", ylabel="Reactive power (MVAr)")
+        axes[1].set(
+            title="Reactive Power", xlabel="Time (s)", ylabel="Reactive power (MVAr)"
+        )
         figure.suptitle(
             f"{technology} Plant Recovery — Terminal Exceptions",
             fontsize=13,
@@ -230,20 +232,34 @@ class SingleRunPlantRecovery:
             y=0.965,
         )
         reference_handle = Line2D(
-            (), (), color="#404040", linestyle="--", linewidth=0.9,
+            (),
+            (),
+            color="#404040",
+            linestyle="--",
+            linewidth=0.9,
             label=(
                 "Pre-fault reference "
                 f"({self.criteria.pre_fault_reference_time_s:.2f} s)"
             ),
         )
         evaluation_handle = Line2D(
-            (), (), color="#404040", linestyle=":", linewidth=1.0,
+            (),
+            (),
+            color="#404040",
+            linestyle=":",
+            linewidth=1.0,
             label=f"Recovery evaluation starts ({evaluation_start_time_s:.2f} s)",
         )
-        axes[0].legend(
+        legend_columns = min(3, max(1, len(legend_handles)))
+        legend_rows = (
+            ceil(len(legend_handles) / legend_columns) if legend_handles else 0
+        )
+        footer_y = 0.130 + 0.045 * legend_rows
+        figure.legend(
             handles=(reference_handle, evaluation_handle),
             title="References",
-            loc="lower right",
+            loc="upper center",
+            bbox_to_anchor=(0.765, 0.50),
             fontsize=8,
             frameon=True,
             fancybox=False,
@@ -251,14 +267,12 @@ class SingleRunPlantRecovery:
             edgecolor="#AEB4BA",
             facecolor="white",
         )
-        legend_columns = min(3, max(1, len(legend_handles)))
-        legend_rows = ceil(len(legend_handles) / legend_columns) if legend_handles else 0
         if legend_handles:
             figure.legend(
                 handles=legend_handles,
                 title="Parks",
                 loc="lower center",
-                bbox_to_anchor=(0.5, 0.08),
+                bbox_to_anchor=(0.415, 0.020),
                 ncol=legend_columns,
                 fontsize=8,
                 frameon=True,
@@ -268,8 +282,8 @@ class SingleRunPlantRecovery:
                 facecolor="white",
             )
         figure.text(
-            0.5,
-            0.035,
+            0.415,
+            footer_y,
             (
                 "Terminal decision at tmax: "
                 f"|ΔP| ≤ {self.criteria.active_power_tolerance_mw:g} MW and "
@@ -282,8 +296,8 @@ class SingleRunPlantRecovery:
         )
         figure.subplots_adjust(
             left=0.09,
-            right=0.96,
-            bottom=0.13 + 0.045 * legend_rows,
+            right=0.735,
+            bottom=footer_y + 0.060,
             top=0.89,
             hspace=0.32,
         )
@@ -318,7 +332,9 @@ class SingleRunPlantRecovery:
     ) -> tuple[tuple[tuple[str, str], dict[str, str]], ...]:
         """Return complete P/Q pairs supported by the published signal schema."""
         discovered: dict[tuple[str, str], dict[str, str]] = {}
-        technology_by_prefix = {prefix: technology for technology, prefix in PLANT_TYPES}
+        technology_by_prefix = {
+            prefix: technology for technology, prefix in PLANT_TYPES
+        }
         for name in available_names:
             match = PLANT_POWER_SIGNAL.fullmatch(name)
             if match is None:

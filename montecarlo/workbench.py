@@ -14,6 +14,7 @@ from montecarlo.context import MonteCarloContext
 from montecarlo.reports import AnalysisReport
 from montecarlo.study import MonteCarloStudy
 from stability.scenario import ContingencyScenario, EvaluationProfile
+from utils.analysis_logging import configure_analysis_logger
 
 
 class MonteCarloWorkbench:
@@ -28,9 +29,11 @@ class MonteCarloWorkbench:
     ) -> None:
         self._output_directory: Path | None = None
         self._show_figures = False
+        self._logger = None
         self.study: MonteCarloStudy | None = None
         self._pipeline: AnalysisPipeline | None = None
         self.dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
+        self.spatial_stability_result = None
         self.open_study(context_path, assets_path, scenario, profile)
 
     @property
@@ -104,6 +107,8 @@ class MonteCarloWorkbench:
         """Choose the common destination before generating any analysis output."""
         from utils.output_directory import select_output_directory
         self._output_directory = select_output_directory(output_directory)
+        self._logger = None
+        self._analysis_logger().info("Output directory selected: %s", self._output_directory)
         return self._output_directory
 
     def analysis_output_directory(self) -> Path:
@@ -114,6 +119,14 @@ class MonteCarloWorkbench:
         output_directory = self._output_directory if self._output_directory is not None else self.study.context.context_path / "analysis_outputs"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
+
+    def _analysis_logger(self):
+        if self._logger is None:
+            self._logger = configure_analysis_logger(
+                self.analysis_output_directory(),
+                "montecarlo",
+            )
+        return self._logger
 
     def analyze(
         self,
@@ -129,7 +142,14 @@ class MonteCarloWorkbench:
         if len(buses) != len(set(buses)):
             raise ValueError("A bus may be selected only once.")
 
+        logger = self._analysis_logger()
+        logger.info(
+            "Starting Monte Carlo analysis for %d run(s); selected buses: %s",
+            len(self.study.context.runs),
+            ", ".join(buses),
+        )
         self._show_figures = show_figures
+        logger.info("Starting selected-bus voltage analysis")
         bus_analyses = tuple(
             BusStudyAnalysis(
                 bus_name=bus_name,
@@ -140,9 +160,20 @@ class MonteCarloWorkbench:
             for bus_name in buses
         )
         study_analysis = StudyAnalysis(bus_analyses)
+        logger.info("Selected-bus voltage analysis completed")
+        logger.info("Starting controller population analysis")
         controller_analysis = self.pipeline.analyze_controllers()
+        for run_id, reason in controller_analysis.skipped_run_reasons:
+            logger.warning("Controller population skipped run_%06d: %s", run_id, reason)
+        logger.info(
+            "Controller population completed: %d evaluated, %d skipped",
+            len(controller_analysis.weighted_run_points),
+            len(controller_analysis.skipped_run_ids),
+        )
+        logger.info("Starting active-power transfer analysis")
         transfer_analysis = self.pipeline.analyze_power_transfers()
         high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
+        logger.info("Active-power transfer analysis completed")
 
         controller_output_directory = self.controller_output_directory()
         self.save_figure(
@@ -171,6 +202,8 @@ class MonteCarloWorkbench:
             study_analysis,
             transfer_analysis,
         )
+        logger.info("Starting spatial stability")
+        self.spatial_stability_result = self.create_spatial_stability()
 
         AnalysisReport(
             study_analysis,
@@ -179,9 +212,11 @@ class MonteCarloWorkbench:
             self.dynamic_stability_analysis,
             scenario=self.pipeline.scenario,
             profile=self.pipeline.profile,
+            spatial_stability=self.spatial_stability_result,
         ).write(
             self.analysis_output_directory()
         )
+        logger.info("Analysis report created")
 
         if show_figures:
             import matplotlib.pyplot as plt
@@ -189,6 +224,7 @@ class MonteCarloWorkbench:
             plt.show()
 
         self._show_figures = False
+        logger.info("Monte Carlo analysis completed")
         return study_analysis
 
     def create_spatial_stability(self, *, output_directory: str | Path | None = None):
@@ -200,10 +236,28 @@ class MonteCarloWorkbench:
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.study is None:
             raise RuntimeError("Open a study before starting spatial analysis.")
-        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
-        return SpatialStabilityAnalyzer(self.study.assets, self.pipeline.profile).create(
-            self.study.context.runs, output,
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_Spatial_Stability"
+        result = SpatialStabilityAnalyzer.create_optional(
+            self.study.assets,
+            self.pipeline.profile,
+            self.study.context.runs,
+            output,
         )
+        logger = self._analysis_logger()
+        if result.analysis is not None:
+            for item in result.analysis.skipped_runs:
+                logger.warning("Spatial stability skipped %s: %s", item.case_id, item.reason)
+        if result.status == "Skipped":
+            logger.warning("Spatial stability skipped: %s", result.reason)
+        else:
+            skipped_count = len(result.analysis.skipped_runs) if result.analysis else 0
+            logger.info(
+                "Spatial stability %s: %d map(s), %d skipped run(s)",
+                result.status.lower(),
+                len(result.figure_paths),
+                skipped_count,
+            )
+        return result
 
     def plot_power_transfers(
         self,

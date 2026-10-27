@@ -16,7 +16,7 @@ from stability.scenario import EvaluationProfile
 class SingleRunReport:
     """Write concise conclusions plus traceable, relational-style details."""
 
-    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, plant_recovery: PlantRecoveryAnalysis, dynamic: DynamicStabilityAssessment) -> None:
+    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, plant_recovery: PlantRecoveryAnalysis, spatial_stability, dynamic: DynamicStabilityAssessment) -> None:
         self.run = run
         self.profile = profile
         self.initialization = initialization
@@ -25,6 +25,7 @@ class SingleRunReport:
         self.high_frequency = high_frequency
         self.angular = angular
         self.plant_recovery = plant_recovery
+        self.spatial_stability = spatial_stability
         self.dynamic = dynamic
 
     def write(self, output_directory: str | Path) -> Path:
@@ -43,6 +44,7 @@ class SingleRunReport:
             "High-Frequency Components": workbook.create_sheet("High-Frequency Components"),
             "Angular Assessment": workbook.create_sheet("Angular Assessment"),
             "Plant Recovery": workbook.create_sheet("Plant Recovery"),
+            "Spatial Stability": workbook.create_sheet("Spatial Stability"),
             "Definitions": workbook.create_sheet("Definitions"),
         }
         sheets["Summary"].title = "Summary"
@@ -55,6 +57,7 @@ class SingleRunReport:
         self._write_high_frequency(sheets["High-Frequency Components"])
         self._write_angular(sheets["Angular Assessment"])
         self._write_plant_recovery(sheets["Plant Recovery"])
+        self._write_spatial_stability(sheets["Spatial Stability"])
         self._write_definitions(sheets["Definitions"])
         for sheet in workbook.worksheets:
             self._format_sheet(sheet)
@@ -121,6 +124,8 @@ class SingleRunReport:
             ("Plant recovery", "Recovered at tmax", len(self.plant_recovery.records) - len(plant_recovery_exceptions), "P and Q both within their terminal tolerance."),
             ("Plant recovery", "Terminal recovery exceptions", len(plant_recovery_exceptions), "Does not alter the dynamic-stability assessment."),
             ("Plant recovery", "Plants outside terminal tolerance", ", ".join(plant_recovery_names) or "None", "Detailed P/Q values are in Plant Recovery."),
+            ("Spatial stability", "Map generation", self.spatial_stability.status, self.spatial_stability.reason),
+            ("Spatial stability", "Generated maps", len(self.spatial_stability.figure_paths), "Spatial metadata and any skip reason are in 06_Spatial_Stability."),
         )
         for row in rows:
             sheet.append(row)
@@ -290,6 +295,17 @@ class SingleRunReport:
                 value.final_time_s,
                 value.status,
             ))
+
+    def _write_spatial_stability(self, sheet) -> None:
+        """Record the optional spatial-map outcome without relabelling stability."""
+        sheet.append(("Item", "Value", "Detail"))
+        sheet.append(("Map generation", self.spatial_stability.status, self.spatial_stability.reason))
+        sheet.append(("Generated maps", len(self.spatial_stability.figure_paths), self.spatial_stability.output_directory))
+        analysis = self.spatial_stability.analysis
+        if analysis is not None and analysis.skipped_runs:
+            sheet.append(("Run", "Spatial status", "Reason"))
+            for item in analysis.skipped_runs:
+                sheet.append((item.case_id, "Skipped", item.reason))
 
     def _write_definitions(self, sheet) -> None:
         voltage, damping = self.profile.voltage_criteria, self.profile.transfer_damping_criteria

@@ -33,6 +33,7 @@ class AnalysisReport:
     dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
     scenario: ContingencyScenario | None = None
     profile: EvaluationProfile | None = None
+    spatial_stability: object | None = None
 
     def write(self, output_directory: str | Path) -> Path:
         """Write the report at the root of the study analysis outputs."""
@@ -53,6 +54,8 @@ class AnalysisReport:
             damping_pairs_sheet = workbook.create_sheet("Active-Power Transfer Damping Pairs")
         if self.high_frequency_analysis is not None:
             high_frequency_sheet = workbook.create_sheet("High-Frequency Components")
+        if self.spatial_stability is not None:
+            spatial_sheet = workbook.create_sheet("Spatial Stability")
 
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
@@ -66,6 +69,8 @@ class AnalysisReport:
             self._write_transfer_damping_pairs(damping_pairs_sheet)
         if self.high_frequency_analysis is not None:
             self._write_high_frequency_components(high_frequency_sheet)
+        if self.spatial_stability is not None:
+            self._write_spatial_stability(spatial_sheet)
         workbook.save(output_path)
         workbook.close()
         return output_path
@@ -99,6 +104,8 @@ class AnalysisReport:
             "Lowest EM Mode Damping [%]",
             "Lowest EM Mode Transfer",
             "High-Frequency Components",
+            "Spatial Map",
+            "Spatial Map Note",
         ))
         for run_id in self.study_analysis.run_ids:
             damping = self._transfer_damping_summary_for_run(run_id)
@@ -108,6 +115,7 @@ class AnalysisReport:
                 else None
             )
             high_frequency_count = self._high_frequency_component_count(run_id)
+            spatial_status, spatial_note = self._spatial_status_for_run(run_id)
             sheet.append((
                 self._run_name(run_id),
                 dynamic_stability.status if dynamic_stability is not None else "Not evaluated",
@@ -119,6 +127,8 @@ class AnalysisReport:
                 damping.lowest_damping_percent,
                 damping.lowest_transfer_name,
                 f"Detected ({high_frequency_count})" if high_frequency_count else "None detected",
+                spatial_status,
+                spatial_note,
             ))
         self._format_sheet(sheet)
 
@@ -311,6 +321,41 @@ class AnalysisReport:
             f"{component.frequency_hz:.2f}"
             for component in assessment.components
         )
+
+    def _write_spatial_stability(self, sheet) -> None:
+        """Document optional map generation and any skipped Monte Carlo runs."""
+        result = self.spatial_stability
+        sheet.append(("Item", "Value", "Detail"))
+        sheet.append(("Map generation", result.status, result.reason))
+        sheet.append(("Generated maps", len(result.figure_paths), result.output_directory))
+        analysis = result.analysis
+        if analysis is not None:
+            sheet.append(("Mapped controller points", len(analysis.points), None))
+            sheet.append(("Excluded controller devices", len(analysis.excluded_devices), None))
+            sheet.append(("Skipped runs", len(analysis.skipped_runs), None))
+            if analysis.skipped_runs:
+                sheet.append(("Run", "Spatial status", "Reason"))
+                for item in analysis.skipped_runs:
+                    sheet.append((item.case_id, "Skipped", item.reason))
+
+    def _spatial_status_for_run(self, run_id: int) -> tuple[str, str | None]:
+        if self.spatial_stability is None:
+            return "Not generated", None
+        result = self.spatial_stability
+        run_name = self._run_name(run_id)
+        analysis = result.analysis
+        if analysis is None:
+            return result.status, result.reason
+        skipped = next(
+            (item for item in analysis.skipped_runs if item.case_id == run_name),
+            None,
+        )
+        if skipped is not None:
+            return "Skipped", skipped.reason
+        mapped = any(point.case_id == run_name for point in analysis.points)
+        if mapped:
+            return "Mapped", None
+        return "Skipped", result.reason or "No spatial controller points were available."
 
     def _write_initialization(self, sheet) -> None:
         sheet.append(

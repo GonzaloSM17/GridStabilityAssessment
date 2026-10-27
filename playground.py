@@ -29,8 +29,9 @@ if __name__ == "__main__":
     workbench.select_output_directory(output_path)
     # Save outputs without opening interactive figure windows.
     workbench.analyze(buses=buses, show_figures=False)
-    spatial_result = workbench.create_spatial_stability()
+    spatial_result = workbench.spatial_stability_result
     print(
-        f"Created {len(spatial_result.figure_paths)} spatial maps in "
+        f"Spatial stability: {spatial_result.status}; "
+        f"{len(spatial_result.figure_paths)} map(s) in "
         f"{spatial_result.output_directory}"
     )

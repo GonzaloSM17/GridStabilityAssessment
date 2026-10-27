@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--run", type=Path, help="Single published run; omitted opens folder picker")
     parser.add_argument("--study", type=Path, help="Study with manifest.json and runs/; omitted opens picker")
     parser.add_argument("--assets", type=Path, help="Assets workbook; omitted opens Excel picker")
-    parser.add_argument("--output", type=Path, help="Output root; maps go in 04_spatial_stability; omitted opens folder picker")
+    parser.add_argument("--output", type=Path, help="Output root; maps go in the workflow spatial folder; omitted opens folder picker")
     parser.add_argument("--fault-time", type=float, default=1.0)
     parser.add_argument("--clearance-time", type=float, default=1.12)
     args = parser.parse_args()
@@ -33,7 +33,10 @@ def main():
             workbench.open_assets()
         output = workbench.select_output_directory(args.output)
         result = workbench.create_spatial_stability()
-    print(f"Created {len(result.figure_paths)} PNG maps in {result.output_directory}")
+    print(
+        f"Spatial stability: {result.status}; {len(result.figure_paths)} PNG map(s) "
+        f"in {result.output_directory}"
+    )
 
 
 if __name__ == "__main__": main()

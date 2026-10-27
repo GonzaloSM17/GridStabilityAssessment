@@ -1,5 +1,6 @@
 """Adapt published run parameters and shared stability analyses to spatial maps."""
 from collections import Counter
+from dataclasses import replace
 from math import isfinite, pi, sqrt
 from pathlib import Path
 import re
@@ -9,7 +10,13 @@ from data.assets import Assets
 from data.run import MonteCarloRun
 from stability.dynamic_stability import assess_dynamic_stability
 from stability.scenario import EvaluationProfile
-from .models import SpatialControllerPoint, SpatialCaseAssessment, SpatialStabilityAnalysis
+from .models import (
+    SpatialControllerPoint,
+    SpatialCaseAssessment,
+    SpatialSkippedRun,
+    SpatialStabilityAnalysis,
+    SpatialStabilityResult,
+)
 
 # Explicit rename confirmed by the user; exact workbook names take precedence.
 ASSET_ALIASES = {"PFV_POZOALMONTE_HUAYCA": "PFV_LA_HUAYCA_II"}
@@ -167,16 +174,73 @@ class SpatialStabilityAnalyzer:
         if not runs: raise ValueError("No runs were selected")
         case_ids = [run.display_name for run in runs]
         if len(case_ids) != len(set(case_ids)): raise ValueError("Run folder names must be unique")
-        points, cases, excluded = [], [], []
+        points, cases, excluded, skipped_runs = [], [], [], []
         component_analyses = component_analyses or {}
         for run in runs:
-            run_points, omitted = read_controller_points(run, self.lookup)
+            try:
+                run_points, omitted = read_controller_points(run, self.lookup)
+            except (FileNotFoundError, KeyError, ValueError) as error:
+                skipped_runs.append(SpatialSkippedRun(run.display_name, str(error)))
+                run_points, omitted = (), ()
             points.extend(run_points); excluded.extend(omitted)
             cases.append(assess_run(run, self.assets, self.profile, **component_analyses.get(run.display_name, {})))
-        return SpatialStabilityAnalysis(tuple(points), tuple(cases), tuple(excluded))
+        return SpatialStabilityAnalysis(
+            tuple(points),
+            tuple(cases),
+            tuple(excluded),
+            tuple(skipped_runs),
+        )
 
     def create(self, runs, output_directory, *, component_analyses=None):
         from .plotting import export_maps
         runs = tuple(runs)
         analysis = self.analyze(runs, component_analyses=component_analyses)
-        return export_maps(analysis, output_directory, self.assets, self.profile, runs)
+        if not analysis.points:
+            reason = (
+                analysis.skipped_runs[0].reason
+                if len(analysis.skipped_runs) == 1
+                else "No run has active controllers with usable spatial metadata."
+            )
+            return self._skipped_result(output_directory, reason, analysis)
+        result = export_maps(analysis, output_directory, self.assets, self.profile, runs)
+        status = (
+            "Completed with warnings"
+            if analysis.skipped_runs or analysis.excluded_devices
+            else "Completed"
+        )
+        reason = (
+            "Some runs or controller devices could not be mapped."
+            if status == "Completed with warnings"
+            else None
+        )
+        return replace(result, status=status, reason=reason)
+
+    @classmethod
+    def create_optional(cls, assets, profile, runs, output_directory, *, component_analyses=None):
+        """Create spatial artefacts without allowing metadata issues to stop a flow."""
+        runs = tuple(runs)
+        try:
+            return cls(assets, profile).create(
+                runs,
+                output_directory,
+                component_analyses=component_analyses,
+            )
+        except (FileNotFoundError, KeyError, OSError, ValueError) as error:
+            analysis = SpatialStabilityAnalysis(
+                (),
+                (),
+                (),
+                tuple(SpatialSkippedRun(run.display_name, str(error)) for run in runs),
+            )
+            return cls._skipped_result(output_directory, str(error), analysis)
+
+    @staticmethod
+    def _skipped_result(output_directory, reason, analysis):
+        output = Path(output_directory).expanduser().resolve()
+        return SpatialStabilityResult(
+            output,
+            analysis,
+            (),
+            status="Skipped",
+            reason=reason,
+        )
