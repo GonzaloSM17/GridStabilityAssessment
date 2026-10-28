@@ -3,3 +3,5 @@ scipy
 matplotlib
 openpyxl
 polars
+scikit-learn>=1.3
+threadpoolctl

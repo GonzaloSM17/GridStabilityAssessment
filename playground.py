@@ -15,6 +15,8 @@ if __name__ == "__main__":
         r"\Assets_Coordenates\EMTP Assets_v2026.xlsx"
     )
     output_path = None
+    run_characterization = True
+    characterization_repeats = 5
     buses = ("KIMAL_220",)
     scenario = ContingencyScenario(
         name="KIMAL CC-2PH-G",
@@ -35,3 +37,20 @@ if __name__ == "__main__":
         f"{len(spatial_result.figure_paths)} map(s) in "
         f"{spatial_result.output_directory}"
     )
+
+    if (
+        run_characterization
+        and spatial_result.analysis is not None
+        and spatial_result.analysis.points
+    ):
+        from montecarlo.spatial_stability.characterization import export_characterization
+        characterization_figures = export_characterization(
+            spatial_result.analysis, spatial_result.output_directory,
+            repeats=characterization_repeats,
+        )
+        print(
+            f"Created {len(characterization_figures)} characterization figures in "
+            f"{spatial_result.output_directory / 'stability_characterization'}"
+        )
+    elif run_characterization:
+        print("Characterization skipped: no usable spatial controller values.")

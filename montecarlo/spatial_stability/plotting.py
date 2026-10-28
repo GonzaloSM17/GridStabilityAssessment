@@ -210,6 +210,10 @@ def export_maps(analysis, output_directory, assets, profile, runs):
             finally: plt.close(figure)
             figures.append(path)
     _write_csv(out/"stability_group_summary.csv", summary, list(summary[0]))
+    from .distributions import export_distributions
+    figures.extend(export_distributions(analysis,out))
+    from .clustering import export_clustering
+    figures.extend(export_clustering(analysis,out))
     metadata = dict(source="Native GridStabilityAssessment parameters.csv and Parquet", assets_workbook=str(assets.workbook_path),
                     run_paths=[str(run.run_path) for run in runs], profile=asdict(profile),
                     criterion="stability.dynamic_stability.assess_dynamic_stability with voltage, modal damping and angular status",
@@ -223,6 +227,7 @@ def export_maps(analysis, output_directory, assets, profile, runs):
                     group_membership={status:sorted(group[0]) for status,group in groups.items()},
                     weighting="Point area proportional to MVA; repeated active controllers share asset MVA. Equal case weight per active unit for class means. Population mean weighted by MVA per run then equally across runs.",
                     missing_data="Missing evidence is retained as Not evaluated according to native aggregation; not included in Stable means. Excluded coordinates/assets listed in excluded_devices.csv.",
+                    distributions="distributions_by_stability/: descriptive comparisons with equal case weights",
                     scope="All active Kp/Ki controllers with mapped coordinates, including constant gains; positions are schematic and are not used as geographic distances.")
     (out/"spatial_metadata.json").write_text(json.dumps(metadata,indent=2,ensure_ascii=False),encoding="utf-8")
     return SpatialStabilityResult(out,analysis,tuple(figures))

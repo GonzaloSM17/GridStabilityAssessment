@@ -41,7 +41,7 @@ spatial_result = workbench.create_spatial_stability(
 )
 ```
 
-Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas a `06_Spatial_Stability/`; en `playground.py`, los mapas van a `04_Spatial_Stability/`. Las llamadas directas al workbench conservan la ruta `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
+Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas a `06_Spatial_Stability/`; en `playground.py`, los mapas van a `04_spatial_stability/`. Las llamadas directas al workbench conservan la ruta `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
 
 ## Datos y criterio
 
@@ -77,10 +77,253 @@ Incluye pruebas de conversion Hz/xi, equivalencias de nombres, unidades repetida
 
 ## Playground para multiples simulaciones
 
-`python playground.py` ejecuta los analisis habituales, incluido espacial como etapa no bloqueante. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; el archivo `analysis.log` y el resumen final informan su estado. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/04_Spatial_Stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
+`python playground.py` ejecuta los analisis habituales, incluido espacial como etapa no bloqueante. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; el archivo `analysis.log` y el resumen final informan su estado. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/04_spatial_stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
 
 ## Auditoria de promedios por estabilidad
 
-La estructura Monte Carlo es `04_Spatial_Stability/{xi_maps|fn_maps}/by_stability/{stable|unstable}/`, sin nivel dynamic intermedio. Si hay casos no evaluados, se conservan separados en not_evaluated; no se mezclan con estables. `cases.csv` enumera las corridas incluidas y sus tres resultados de criterio. `device_class_comparison.csv` presenta los dos promedios por unidad y sus diferencias. `spatial_metadata.json` registra la pertenencia exacta de cada grupo.
+La estructura Monte Carlo es `04_spatial_stability/{xi_maps|fn_maps}/by_stability/{stable|unstable}/`, sin nivel dynamic intermedio. Si hay casos no evaluados, se conservan separados en not_evaluated; no se mezclan con estables. `cases.csv` enumera las corridas incluidas y sus tres resultados de criterio. `device_class_comparison.csv` presenta los dos promedios por unidad y sus diferencias. `spatial_metadata.json` registra la pertenencia exacta de cada grupo.
 
 Los mapas xi agrupados usan una escala comun calculada con los promedios de los grupos; los mapas individuales conservan su escala comun por corrida. Los mapas fn mantienen las bandas fijas elegidas: valores numericos diferentes dentro de la misma banda tienen el mismo color. No se altera la clasificacion dinamica ni se cambia de banda para forzar diferencias visuales.
+
+## Distribuciones por estabilidad
+
+Se generan automaticamente en `04_spatial_stability/distributions_by_stability/`, usando las mismas etiquetas dinamicas de tension + amortiguamiento + angulo. Para generar solo estas figuras desde resultados guardados, sin releer Parquet ni regenerar mapas:
+
+```powershell
+python -m montecarlo.spatial_stability.distributions --results "C:/ruta/04_spatial_stability"
+```
+
+- `01_case_parameter_distributions.png`: ECDF y cajas con puntos de los promedios por MVA de xi y fn de cada caso. Cada punto representa una corrida.
+- `02_capacity_share_distributions.png`: distribucion entre casos de la fraccion MVA con xi < 0.7, fn >= 10 Hz o ambas condiciones. Los umbrales son exploratorios, no reglas de estabilidad. Se pueden configurar con `--low-xi-threshold` y `--high-fn-threshold-hz`.
+- `03_population_mva_distributions.png`: ECDF de valores por unidad, ponderando por fraccion MVA dentro de cada caso y dando igual peso a cada caso dentro de su clase. No confunde miles de unidades/casos con miles de corridas independientes.
+- `04_technology_case_distributions.png`: distribuciones de promedios por caso dentro de cada tecnologia, definida por el prefijo GeneratorName (por ejemplo BESS, PFV, PE, PMGD).
+
+Los CSV registran indicadores por caso, por tecnologia, cuantiles y curvas poblacionales. Se muestran los tamanos de muestra, se conservan clases ausentes sin inventar valores y se incluyen no evaluados en gris solo cuando existen. Son graficos descriptivos, sin inferencia causal ni pruebas de significancia. Los mapas y planos anteriores conservan su formato.
+
+
+## Clustering de corridas con diez indicadores
+
+Se ejecuta automaticamente al crear los resultados espaciales con playground.py.
+La salida queda en 04_spatial_stability/clustering/. No abre ventanas ni imprime
+progreso por corrida. Tambien se puede ejecutar solo el clustering, reutilizando
+los CSV espaciales existentes y sin releer Parquet:
+
+```powershell
+python clustering_playground.py
+python -m montecarlo.spatial_stability.clustering --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+```
+
+Sin rutas, solicita la carpeta de resultados espaciales y la carpeta de salida;
+crea clustering/ dentro de la salida elegida.
+
+Las diez entradas son weighted_xi_BESS, weighted_xi_PE, weighted_xi_PFV,
+weighted_xi_PMGD, weighted_fn_hz_BESS, weighted_fn_hz_PE, weighted_fn_hz_PFV,
+weighted_fn_hz_PMGD, xi_spread y fn_hz_spread. Los ocho promedios usan MVA
+dentro de cada tecnologia; las dos dispersiones son desviaciones estandar MVA
+sobre todos los dispositivos incluidos. Cada corrida pesa igual. Las clases
+dinamicas (tension, amortiguamiento y angulo) solo se comparan despues del ajuste.
+
+Requiere las cuatro tecnologias en cada caso; los casos incompletos se documentan
+en excluded_cases.csv, sin rellenar con ceros. Con menos de cuatro casos completos,
+o menos de tres perfiles distintos, se guarda el motivo sin ajustar grupos.
+
+Se estandarizan las diez variables y se comparan k-means y PCA + k-means.
+PCA conserva por defecto el 90 % de su variabilidad, no solo dos componentes.
+Se prueban k=2..6, limitados por los datos, y se descartan grupos de un solo caso.
+Se elige k por silhouette en el espacio original de los diez indicadores
+estandarizados para comparar ambos metodos con la misma distancia.
+Se registran tambien silhouette del espacio de ajuste y ARI de 20 submuestras
+con preprocesado reestimado. Silhouette >= 0.25 y ARI mediana >= 0.60 son
+filtros descriptivos configurables, no pruebas de significancia ni garantias
+de que existan familias fisicas. Si no pasan, el resultado se identifica como
+no_well_defined_groups y la particion se conserva como exploratoria.
+
+Opciones CLI: --max-clusters, --pca-variance, --seed,
+--silhouette-threshold y --ari-threshold.
+
+- 01_model_selection.png: silhouette por k y variabilidad acumulada PCA.
+- 03_cluster_stability.png: cantidad de casos estables, inestables y no evaluados.
+- 04_pca_projection.png: mismas corridas en PC1-PC2, con colores por grupo
+  y por estabilidad; los ejes informan la variabilidad representada.
+- 05_pca_groups_and_stability.png: color por grupo y forma por estabilidad en cada metodo.
+- case_features.csv y case_clusters.csv: indicadores y pertenencia por corrida.
+- cluster_profiles.csv: perfiles medios en unidades originales.
+- cluster_stability.csv: composicion de estabilidad y fallas por criterio,
+  que pueden solaparse.
+- model_selection.csv, pca_variance.csv, pca_loadings.csv y
+  clustering_metadata.json: ajustes, escalado, semillas y diagnosticos.
+
+### Lectura conjunta de grupos y estabilidad
+
+Se elimina 02_cluster_profiles.png. Se conservan 01, 03 y 04, y se agrega
+05_pca_groups_and_stability.png: dos paneles (kmeans y pca_kmeans) con color por
+grupo y forma por estabilidad dinamica. Circulo = estable; X = inestable;
+rombo = no evaluado solo si existe. Cada punto sigue siendo una corrida.
+Las coordenadas y colores de grupo coinciden con el grafico 04.
+
+En el grafico 03 la leyenda muestra estable/inestable. Si hay casos no evaluados,
+se conservan como barras grises y se informa su cantidad en el titulo del panel,
+sin incorporarlos a ninguno de los dos estados ni incluirlos en la leyenda.
+
+PCA_DESCRIPTION.md explica la estandarizacion y la combinacion de los diez
+indicadores con una tabla de coeficientes PC1/PC2 y sus porcentajes de variabilidad.
+Se recalcula con cada estudio; pca_loadings.csv conserva los coeficientes completos.
+PC1 y PC2 son combinaciones lineales, no coordenadas espaciales ni criterios de estabilidad.
+
+
+### Porcentajes por tecnologia e inestabilidad por indicadores fisicos
+
+Se incorporan automaticamente tres PNG adicionales en clustering/:
+
+- 06_weighted_pca_projection.png: nuevos ejes PCA ponderados por unidades y MVA.
+- 07_physical_instability.png: proporcion de corridas inestables frente a fraccion
+  de unidades/MVA con xi < 0.7 y fn media, con ambas ponderaciones.
+- 08_technology_instability.png: los mismos mapas por tecnologia, frente al
+  resultado dinamico de cada caso completo.
+
+Los limites por cuartiles no usan las etiquetas de estabilidad y son comunes
+entre ponderaciones dentro de cada poblacion. Cada celda informa porcentaje y
+conteo inestables/evaluados; se raya si tiene menos de cinco evaluados. Vacio
+no equivale a estable. No evaluados quedan fuera del denominador y se cuentan
+separadamente. xi < 0.7 es exploratorio, no un limite operativo.
+
+TECHNOLOGY_ANALYSIS.md detalla las formulas, denominadores y alcances.
+Los CSV conservan composicion por caso, porcentajes de coeficientes y conteos
+de celdas con intervalos Wilson 95 %. --low-xi-threshold y --min-cell-cases
+permiten ajustar el umbral exploratorio y el aviso de muestra reducida.
+
+
+### Correccion: pesos aplicados antes de PCA
+
+El grafico 06 ahora es 06_weighted_pca_projection.png y reemplaza el reparto
+posterior de coeficientes. Usa los mismos diez indicadores con medias y
+dispersiones calculadas por unidades o MVA. Se estandarizan, se multiplican por
+la raiz de la fraccion de poblacion representada por cada indicador y se vuelve
+a ajustar PCA. Los indicadores por tecnologia usan su fraccion n_t/n_total
+o MVA_t/MVA_total promediada entre corridas; las dispersiones globales usan 1
+porque representan el conjunto. No se estandariza otra vez despues del peso.
+
+El color conserva las etiquetas originales de kmeans/pca_kmeans; el simbolo
+indica estabilidad. Este cambio recalcula los ejes, no los grupos.
+WEIGHTED_PCA_DESCRIPTION.md y weighted_pca_*.csv detallan entradas, pesos,
+coordenadas, coeficientes efectivos y variabilidad. PCA_DESCRIPTION.md describe
+el PCA original de los graficos 04/05; la descripcion ponderada es independiente.
+
+En el grafico 07 se explicita que un panel calcula fraccion y promedio por
+numero de unidades y el otro por MVA. Los intervalos de celda son comunes,
+pero cada corrida puede cambiar de celda al cambiar su ponderacion.
+El porcentaje de color siempre usa inestables/(estables+inestables), con igual
+peso por corrida. No se grafican solo las corridas inestables.
+
+
+### Dos grupos nuevos segun xi y su dispersion
+
+Se agrega 09_xi_groups_weighted_pca.png y se mantiene el grafico 05.
+Los nuevos grupos se ajustan exclusivamente con xi medio y desviacion estandar
+de xi del conjunto de unidades de cada caso. Estos dos indicadores se
+estandarizan y se aplica k-means con exactamente dos grupos e igual peso
+por corrida. No se usa fn ni la estabilidad en la nueva separacion.
+
+Cada ponderacion (unidades/MVA) forma sus propios grupos. G1 tiene menor
+xi medio de grupo y G2 mayor; la relacion de dispersion se describe con los
+promedios reales, sin forzar que un grupo tenga mayor o menor dispersion.
+Los nombres son relativos a la muestra, no umbrales operativos.
+
+Arriba se proyectan los nuevos grupos sobre los mismos ejes PCA ponderados
+de diez indicadores del grafico 06. Abajo se muestra xi medio frente a
+dispersion para entender la separacion. El color identifica los grupos nuevos
+y el simbolo la estabilidad dinamica nativa. Se exportan pertenencias,
+centroides, composicion de estabilidad, silhouette y ARI de submuestras.
+
+XI_GROUPS_DESCRIPTION.md detalla el metodo y resume los perfiles.
+Para generar solo el grafico nuevo sin tocar los anteriores:
+
+```powershell
+python -m montecarlo.spatial_stability.xi_groups --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+```
+
+Sin rutas se solicitan carpetas de entrada y salida mediante selectores.
+
+
+## Caracterizacion amplia sin PCA
+
+playground.py ejecuta tambien el analisis supervisado adicional sobre los resultados
+espaciales y guarda una carpeta independiente:
+04_spatial_stability/stability_characterization/.
+Los mapas y el grafico 05 de clustering mantienen su formato y sus indicadores.
+La clasificacion nativa de tension, amortiguamiento y angulo nunca se reemplaza.
+
+Se comparan logistica regularizada, logistica con interacciones, arbol pequeno,
+bosque aleatorio, boosting, SVM radial y Naive Bayes. Cada familia prueba:
+diez indicadores originales; nueve sin dispersion fn; nueve mas correlacion xi-fn.
+Se usan ambos esquemas de agregacion (unidades/MVA); no se aplica PCA.
+Los casos no evaluados y las tecnologias incompletas se excluyen con motivo.
+La correlacion indefinida se imputa exclusivamente dentro del entrenamiento.
+
+Validacion anidada estratificada, cinco particiones externas repetidas cinco veces
+y tres internas. Familia, parametros y conjunto de indicadores se eligen dentro
+del entrenamiento por log loss, incluyendo prevalencia como candidato.
+La fila nested_selection mide ese procedimiento completo.
+Las otras filas son comparaciones exploratorias de opciones prefijadas.
+La seleccion de nueve indicadores ya fue motivada por esta muestra: hace falta
+confirmacion externa con simulaciones nuevas, aunque se use validacion anidada.
+
+Se guardan cinco PNG: comparacion de familias, aporte por bloques,
+curvas de validacion, arboles descriptivos y diferencias de parametros por clase.
+Los arboles dibujados se ajustan con toda la muestra y no representan validacion.
+Los CSV conservan entradas, exclusiones, predicciones externas, parametros
+seleccionados y dispersion entre particiones (no es un intervalo de confianza).
+
+Para ejecutar solo este analisis, sin releer Parquet ni regenerar mapas:
+
+```powershell
+python characterization_playground.py
+python -m montecarlo.spatial_stability.characterization --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+```
+
+Sin rutas abre selectores de entrada/salida. --repeats configura repeticiones;
+--families permite elegir un subconjunto de familias.
+En playground.py, run_characterization controla esta etapa y
+characterization_repeats configura su coste. No hay progreso por corrida
+ni ventanas Matplotlib; la ejecucion completa puede tardar varios minutos.
+
+
+### Perfiles estables e inestables dentro de cada hoja
+
+04_descriptive_trees.png ahora muestra en cada hoja los conteos de ambas clases,
+sus nueve medianas xi/fn y dispersion xi, y la diferencia de medianas I-E.
+Los datos describen los casos de la hoja, sin crear divisiones adicionales
+ni cambiar su clasificacion. Se mantienen profundidad 2 y los mismos umbrales.
+
+Se agregan 04_descriptive_trees_units.png y 04_descriptive_trees_mva.png para
+facilitar la lectura. Cada hoja informa fallos/evaluados de tension,
+amortiguamiento modal y angulo entre sus inestables. Los criterios pueden
+solaparse; una evidencia no evaluada no se cuenta como un cumplimiento.
+Clases ausentes: --. Clases con menos de cinco corridas: aviso de poca muestra.
+I-E es una diferencia descriptiva, no un coeficiente ni un efecto causal.
+
+tree_leaf_profiles.csv conserva medianas y rangos; tree_leaf_summary.csv
+conteos y criterios; tree_leaf_membership.csv pertenencias. TREE_PROFILES.md
+explica la lectura. Para actualizar solo estos arboles usando resultados guardados,
+sin repetir la comparacion de modelos ni modificar los mapas:
+
+```powershell
+python characterization_playground.py --trees-only --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+```
+
+
+## Compatibilidad con corridas omitidas del analisis espacial
+
+El flujo principal reutiliza spatial_stability_result calculado por analyze();
+no vuelve a ejecutar el analisis espacial. Si no hay puntos utilizables se
+omite la caracterizacion adicional sin detener el reporte electrico.
+
+Las etiquetas nativas de todas las corridas se conservan en case_assessments.csv.
+Los estudios de xi/fn solo usan corridas con controladores representables;
+las omitidas se documentan y nunca se reemplazan por valores cero ni estables.
+El cargador admite los registros spatial_status=Skipped del exportador nuevo
+y conserva su razon. Los conteos minimos de mapas de indicadores fisicos
+solo incluyen corridas con datos de controladores.
+
+Monte Carlo conserva 04_spatial_stability/; el flujo individual usa
+06_Spatial_Stability/ como en la estructura actual del repositorio.
