@@ -5,6 +5,7 @@ from math import isfinite, pi, sqrt
 from pathlib import Path
 import re
 import unicodedata
+from time import monotonic
 
 from data.assets import Assets
 from data.run import MonteCarloRun
@@ -169,14 +170,17 @@ class SpatialStabilityAnalyzer:
         self.assets, self.profile = assets, profile
         self.lookup = SpatialAssetLookup(assets)
 
-    def analyze(self, runs, *, component_analyses=None):
+    def analyze(self, runs, *, component_analyses=None, progress=None):
         runs = tuple(runs)
         if not runs: raise ValueError("No runs were selected")
         case_ids = [run.display_name for run in runs]
         if len(case_ids) != len(set(case_ids)): raise ValueError("Run folder names must be unique")
         points, cases, excluded, skipped_runs = [], [], [], []
         component_analyses = component_analyses or {}
-        for run in runs:
+        if progress:
+            progress(f"Spatial stability: evaluating voltage, damping and angle for {len(runs)} run(s)")
+        last_report = monotonic()
+        for completed, run in enumerate(runs, 1):
             try:
                 run_points, omitted = read_controller_points(run, self.lookup)
             except (FileNotFoundError, KeyError, ValueError) as error:
@@ -184,6 +188,15 @@ class SpatialStabilityAnalyzer:
                 run_points, omitted = (), ()
             points.extend(run_points); excluded.extend(omitted)
             cases.append(assess_run(run, self.assets, self.profile, **component_analyses.get(run.display_name, {})))
+            now = monotonic()
+            if progress and completed < len(runs) and now - last_report >= 60:
+                progress(f"Spatial stability: evaluated {completed}/{len(runs)} runs")
+                last_report = now
+        if progress:
+            counts = Counter(case.assessment.status for case in cases)
+            progress(f"Spatial stability: evaluated {len(cases)}/{len(runs)} runs; "
+                     f"{counts['Stable']} stable, {counts['Unstable']} unstable, "
+                     f"{counts['Not evaluated']} not evaluated")
         return SpatialStabilityAnalysis(
             tuple(points),
             tuple(cases),
@@ -191,10 +204,10 @@ class SpatialStabilityAnalyzer:
             tuple(skipped_runs),
         )
 
-    def create(self, runs, output_directory, *, component_analyses=None):
+    def create(self, runs, output_directory, *, component_analyses=None, progress=None):
         from .plotting import export_maps
         runs = tuple(runs)
-        analysis = self.analyze(runs, component_analyses=component_analyses)
+        analysis = self.analyze(runs, component_analyses=component_analyses, progress=progress)
         if not analysis.points:
             reason = (
                 analysis.skipped_runs[0].reason
@@ -202,7 +215,7 @@ class SpatialStabilityAnalyzer:
                 else "No run has active controllers with usable spatial metadata."
             )
             return self._skipped_result(output_directory, reason, analysis)
-        result = export_maps(analysis, output_directory, self.assets, self.profile, runs)
+        result = export_maps(analysis, output_directory, self.assets, self.profile, runs, progress=progress)
         status = (
             "Completed with warnings"
             if analysis.skipped_runs or analysis.excluded_devices
@@ -216,14 +229,17 @@ class SpatialStabilityAnalyzer:
         return replace(result, status=status, reason=reason)
 
     @classmethod
-    def create_optional(cls, assets, profile, runs, output_directory, *, component_analyses=None):
+    def create_optional(cls, assets, profile, runs, output_directory, *, component_analyses=None, progress=None):
         """Create spatial artefacts without allowing metadata issues to stop a flow."""
         runs = tuple(runs)
         try:
+            if progress:
+                progress("Spatial stability: loading asset coordinates and power ratings")
             return cls(assets, profile).create(
                 runs,
                 output_directory,
                 component_analyses=component_analyses,
+                progress=progress,
             )
         except (FileNotFoundError, KeyError, OSError, ValueError) as error:
             analysis = SpatialStabilityAnalysis(

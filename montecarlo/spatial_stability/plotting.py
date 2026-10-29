@@ -8,6 +8,7 @@ import csv
 import json
 import re
 import unicodedata
+from time import monotonic
 
 from .models import SpatialStabilityResult
 
@@ -99,8 +100,9 @@ def _draw(points, universe, metric, title, subtitle, bounds, xi_limits, fn_edges
     return figure
 
 
-def export_maps(analysis, output_directory, assets, profile, runs):
+def export_maps(analysis, output_directory, assets, profile, runs, *, progress=None):
     import matplotlib.pyplot as plt
+    report = progress or (lambda message: None)
     points, cases = analysis.points, analysis.cases
     if not points: raise ValueError("No spatial controller points to export")
     if len({case.case_id for case in cases}) != len(cases): raise ValueError("Duplicate case assessment")
@@ -170,22 +172,16 @@ def export_maps(analysis, output_directory, assets, profile, runs):
         "delta_fn_hz_unstable_minus_stable","fn_band_stable","fn_band_unstable","same_fn_band"]
     _write_csv(out/"device_class_comparison.csv",comparison,comparison_columns)
     figures, summary = [], []
+    report(f"Spatial stability: saved controller values and classifications in {out}")
+    from .distributions import export_distributions
+    report("Spatial stability: creating distributions by stability")
+    distribution_paths = export_distributions(analysis, out)
+    figures.extend(distribution_paths)
+    report(f"Spatial stability: saved {len(distribution_paths)} distribution figure(s)")
+    report("Spatial stability: creating mean maps by stability")
     columns = ["device_id","generator_name","asset_name","x","y","mva","n_cases","n_cases_in_class","mean_xi","mean_fn_hz","frequency_band"]
     for metric, folder_name, prefix in (("xi","xi_maps","xi"),("fn_hz","fn_maps","fn")):
         directory = out/folder_name
-        (directory/"by_case").mkdir(parents=True, exist_ok=True)
-        for case in mapped_cases:
-            selected = tuple(p for p in points if p.case_id == case.case_id)
-            row = next(row for row in case_rows if row["case_id"] == case.case_id)
-            value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
-            units = " Hz" if metric=="fn_hz" else ""
-            figure = _draw(selected,universe,metric,f"Run {case.case_id}: {'xi' if metric=='xi' else 'natural frequency'}",
-                           f"Dynamic stability: {case.assessment.status} (voltage + damping + angle)\n"
-                           f"MVA-weighted included population = {value:.4f}{units}", bounds,(lo,hi),fn_edges,size_factor)
-            path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
-            try: figure.savefig(path,dpi=150)
-            finally: plt.close(figure)
-            figures.append(path)
         for status, status_folder in STATUS_DIRECTORIES.items():
             selected_cases, averages, rows = groups[status]
             # Always represent Stable/Unstable, and create an unknown class only when it exists.
@@ -210,10 +206,37 @@ def export_maps(analysis, output_directory, assets, profile, runs):
             finally: plt.close(figure)
             figures.append(path)
     _write_csv(out/"stability_group_summary.csv", summary, list(summary[0]))
-    from .distributions import export_distributions
-    figures.extend(export_distributions(analysis,out))
+    report("Spatial stability: mean maps by stability saved")
     from .clustering import export_clustering
-    figures.extend(export_clustering(analysis,out))
+    report("Spatial stability: creating clustering and PCA figures")
+    clustering_paths = export_clustering(analysis, out)
+    figures.extend(clustering_paths)
+    report(f"Spatial stability: saved {len(clustering_paths)} clustering/PCA figure(s)")
+    total_maps = 2 * len(mapped_cases)
+    completed_maps = 0
+    last_report = monotonic()
+    report(f"Spatial stability: creating {total_maps} individual maps; summary figures are already saved")
+    for metric, folder_name, prefix in (("xi","xi_maps","xi"),("fn_hz","fn_maps","fn")):
+        directory = out/folder_name
+        (directory/"by_case").mkdir(parents=True, exist_ok=True)
+        for case in mapped_cases:
+            selected = tuple(p for p in points if p.case_id == case.case_id)
+            row = next(row for row in case_rows if row["case_id"] == case.case_id)
+            value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
+            units = " Hz" if metric=="fn_hz" else ""
+            figure = _draw(selected,universe,metric,f"Run {case.case_id}: {'xi' if metric=='xi' else 'natural frequency'}",
+                           f"Dynamic stability: {case.assessment.status} (voltage + damping + angle)\n"
+                           f"MVA-weighted included population = {value:.4f}{units}", bounds,(lo,hi),fn_edges,size_factor)
+            path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
+            try: figure.savefig(path,dpi=150)
+            finally: plt.close(figure)
+            figures.append(path)
+            completed_maps += 1
+            now = monotonic()
+            if progress and completed_maps < total_maps and now - last_report >= 60:
+                report(f"Spatial stability: saved {completed_maps}/{total_maps} individual maps")
+                last_report = now
+    report(f"Spatial stability: saved {completed_maps}/{total_maps} individual maps")
     metadata = dict(source="Native GridStabilityAssessment parameters.csv and Parquet", assets_workbook=str(assets.workbook_path),
                     run_paths=[str(run.run_path) for run in runs], profile=asdict(profile),
                     criterion="stability.dynamic_stability.assess_dynamic_stability with voltage, modal damping and angular status",

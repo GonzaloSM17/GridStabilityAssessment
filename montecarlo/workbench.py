@@ -237,13 +237,14 @@ class MonteCarloWorkbench:
         if self.study is None:
             raise RuntimeError("Open a study before starting spatial analysis.")
         output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
+        logger = self._analysis_logger()
         result = SpatialStabilityAnalyzer.create_optional(
             self.study.assets,
             self.pipeline.profile,
             self.study.context.runs,
             output,
+            progress=logger.info,
         )
-        logger = self._analysis_logger()
         if result.analysis is not None:
             for item in result.analysis.skipped_runs:
                 logger.warning("Spatial stability skipped %s: %s", item.case_id, item.reason)
