@@ -9,7 +9,7 @@ from time import monotonic
 
 from data.assets import Assets
 from data.run import MonteCarloRun
-from stability.dynamic_stability import assess_dynamic_stability
+from stability.dynamic_stability import assess_dynamic_stability, assess_monte_carlo_stability
 from stability.scenario import EvaluationProfile
 from .models import (
     SpatialControllerPoint,
@@ -121,7 +121,7 @@ def read_controller_points(run, lookup):
     return points, tuple(excluded)
 
 
-def assess_components(run_id, voltage, damping, angular):
+def assess_components(run_id, voltage, damping, angular=None, *, include_angle=True):
     """Apply the same aggregation rules as SingleRunWorkbench.create_report."""
     voltage_status = "Not evaluated"
     if voltage is not None and voltage.assessments:
@@ -134,13 +134,15 @@ def assess_components(run_id, voltage, damping, angular):
         elif any(item.status == "growing" for item in usable): damping_status = "Growing"
         elif any(item.status == "damped_under" for item in usable): damping_status = "Damped under"
         elif any(item.damping_ratio is not None for item in usable): damping_status = "Damped"
+    if not include_angle:
+        return assess_monte_carlo_stability(run_id, voltage_status, damping_status)
     angular_status = "Not evaluated"
     if angular is not None and angular.machines:
         angular_status = "Stable" if angular.is_stable else "Unstable"
     return assess_dynamic_stability(run_id, voltage_status, damping_status, angular_status)
 
 
-def assess_run(run, assets, profile, *, voltage=None, damping=None, angular=None):
+def assess_run(run, assets, profile, *, voltage=None, damping=None, angular=None, include_angle=True):
     """Reuse supplied analyses or calculate each using the new repository's code."""
     from single_run.voltage_stability import SingleRunVoltageStability
     from single_run.damping_stability import SingleRunDampingStability
@@ -152,6 +154,9 @@ def assess_run(run, assets, profile, *, voltage=None, damping=None, angular=None
         damping=lambda: SingleRunDampingStability(run, profile).analyze(),
         angular=lambda: SingleRunAngularStability(run, profile.scenario, assets).analyze(),
     )
+    if not include_angle:
+        calculators.pop("angular")
+        analyses["angular"] = None
     for name, calculate in calculators.items():
         if analyses[name] is not None: continue
         if run.dataset is None:
@@ -161,24 +166,41 @@ def assess_run(run, assets, profile, *, voltage=None, damping=None, angular=None
             analyses[name] = calculate()
         except (ValueError, KeyError, FileNotFoundError) as error:
             diagnostics.append(f"{name}: {error}")
-    assessment = assess_components(run.run_id, **analyses)
+    assessment = assess_components(run.run_id, **analyses, include_angle=include_angle)
     return SpatialCaseAssessment(run.display_name, assessment, tuple(diagnostics))
 
 
 class SpatialStabilityAnalyzer:
-    def __init__(self, assets: Assets, profile: EvaluationProfile):
+    def __init__(self, assets: Assets, profile: EvaluationProfile, *, include_angle=True):
         self.assets, self.profile = assets, profile
+        self.include_angle = include_angle
         self.lookup = SpatialAssetLookup(assets)
 
-    def analyze(self, runs, *, component_analyses=None, progress=None):
+    def analyze(self, runs, *, component_analyses=None, case_assessments=None,
+                voltage_scope="All available 220/500 kV buses", progress=None):
         runs = tuple(runs)
         if not runs: raise ValueError("No runs were selected")
         case_ids = [run.display_name for run in runs]
         if len(case_ids) != len(set(case_ids)): raise ValueError("Run folder names must be unique")
         points, cases, excluded, skipped_runs = [], [], [], []
         component_analyses = component_analyses or {}
+        if case_assessments is not None:
+            if self.include_angle:
+                raise ValueError("Cached Monte Carlo labels cannot include the angular criterion")
+            missing = [run.run_id for run in runs if run.run_id not in case_assessments]
+            if missing:
+                raise ValueError(f"Missing cached Monte Carlo assessments: {missing}")
+            for run in runs:
+                assessment = case_assessments[run.run_id]
+                expected = assess_monte_carlo_stability(
+                    run.run_id, assessment.voltage_status, assessment.modal_damping_status)
+                if (assessment.run_id != run.run_id or assessment.angular_status is not None
+                        or assessment.status != expected.status):
+                    raise ValueError("Cached labels differ from the Monte Carlo criterion")
         if progress:
-            progress(f"Spatial stability: evaluating voltage, damping and angle for {len(runs)} run(s)")
+            scope = "voltage, damping and angle" if self.include_angle else "voltage and damping (no angle)"
+            action = "reusing Monte Carlo classifications" if case_assessments is not None else f"evaluating {scope}"
+            progress(f"Spatial stability: {action} for {len(runs)} run(s)")
         last_report = monotonic()
         for completed, run in enumerate(runs, 1):
             try:
@@ -187,7 +209,11 @@ class SpatialStabilityAnalyzer:
                 skipped_runs.append(SpatialSkippedRun(run.display_name, str(error)))
                 run_points, omitted = (), ()
             points.extend(run_points); excluded.extend(omitted)
-            cases.append(assess_run(run, self.assets, self.profile, **component_analyses.get(run.display_name, {})))
+            if case_assessments is not None:
+                cases.append(SpatialCaseAssessment(run.display_name, case_assessments[run.run_id]))
+            else:
+                cases.append(assess_run(run, self.assets, self.profile,
+                    include_angle=self.include_angle, **component_analyses.get(run.display_name, {})))
             now = monotonic()
             if progress and completed < len(runs) and now - last_report >= 60:
                 progress(f"Spatial stability: evaluated {completed}/{len(runs)} runs")
@@ -202,12 +228,15 @@ class SpatialStabilityAnalyzer:
             tuple(cases),
             tuple(excluded),
             tuple(skipped_runs),
+            voltage_scope=voltage_scope,
         )
 
-    def create(self, runs, output_directory, *, component_analyses=None, progress=None):
+    def create(self, runs, output_directory, *, component_analyses=None, case_assessments=None,
+               voltage_scope="All available 220/500 kV buses", progress=None):
         from .plotting import export_maps
         runs = tuple(runs)
-        analysis = self.analyze(runs, component_analyses=component_analyses, progress=progress)
+        analysis = self.analyze(runs, component_analyses=component_analyses,
+                                case_assessments=case_assessments, voltage_scope=voltage_scope, progress=progress)
         if not analysis.points:
             reason = (
                 analysis.skipped_runs[0].reason
@@ -229,16 +258,20 @@ class SpatialStabilityAnalyzer:
         return replace(result, status=status, reason=reason)
 
     @classmethod
-    def create_optional(cls, assets, profile, runs, output_directory, *, component_analyses=None, progress=None):
+    def create_optional(cls, assets, profile, runs, output_directory, *, component_analyses=None,
+                        include_angle=True, case_assessments=None,
+                        voltage_scope="All available 220/500 kV buses", progress=None):
         """Create spatial artefacts without allowing metadata issues to stop a flow."""
         runs = tuple(runs)
         try:
             if progress:
                 progress("Spatial stability: loading asset coordinates and power ratings")
-            return cls(assets, profile).create(
+            return cls(assets, profile, include_angle=include_angle).create(
                 runs,
                 output_directory,
                 component_analyses=component_analyses,
+                case_assessments=case_assessments,
+                voltage_scope=voltage_scope,
                 progress=progress,
             )
         except (FileNotFoundError, KeyError, OSError, ValueError) as error:

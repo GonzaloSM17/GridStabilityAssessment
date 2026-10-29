@@ -59,14 +59,21 @@ def leaf_profiles(tree, values, y, case_ids, assessments):
             gini=float(nodes.impurity[node]),
             path=" AND ".join(f"{feature} {operator} {threshold:.12g}"
                               for feature, operator, threshold in conditions) or "All cases")
+        summary["angular_criterion_active"] = any(_get(assessments[c], "angular_status") is not None for c in ids)
         for criterion, field in (("voltage", "voltage_status"),
                                   ("damping", "modal_damping_status"),
                                   ("angle", "angular_status")):
             states = [_get(assessments[c], field) for c, selected in zip(ids, unstable) if selected]
             unknown = {None, "Not evaluated", "Not measurable", "Not applicable"}
             evaluated = [s for s in states if s not in unknown]
-            failures = sum(s != "Damped" if criterion == "damping" else s == "Unstable"
-                           for s in evaluated)
+            if criterion == "damping":
+                failures = sum(
+                    _get(assessments[c], field) == "Growing" or
+                    (_get(assessments[c], "angular_status") is not None and
+                     _get(assessments[c], field) == "Damped under")
+                    for c, selected in zip(ids, unstable) if selected)
+            else:
+                failures = sum(s == "Unstable" for s in evaluated)
             summary[criterion+"_failures_unstable"] = int(failures)
             summary[criterion+"_evaluated_unstable"] = len(evaluated)
         summaries.append(summary)
@@ -111,6 +118,8 @@ def leaf_text(summary, rows):
                      f"{value(row['delta_unstable_minus_stable'],digits,True):>9}")
     lines += ["", "Fallas / evaluados entre los INESTABLES:"]
     for label, criterion in (("Tension", "voltage"), ("Amortiguamiento modal", "damping"), ("Angulo", "angle")):
+        if criterion == "angle" and not summary.get("angular_criterion_active", True):
+            continue
         evaluated = summary[criterion+"_evaluated_unstable"]
         failures = summary[criterion+"_failures_unstable"]
         lines.append(f"{label}: {failures}/{evaluated}" if evaluated else f"{label}: sin evaluados")

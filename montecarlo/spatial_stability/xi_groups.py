@@ -150,7 +150,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         case_ids=list(ids), clustering=groups,
         pca_scope="Same ten-indicator population-weighted PCA coordinates as graph 06",
         group_scope="Two new groups per weighting basis, fitted only on global xi mean and xi standard deviation",
-        outcome_scope="Native voltage + modal damping + angle labels are displayed after grouping",
+        outcome_scope=analysis.criterion_description + "; labels are displayed after grouping",
         weighting="Units: equal controller weight; MVA: nominal-power fractions within each case; equal case weight in k-means",
         group_numbering="G1 has lower centroid mean xi; G2 higher. Spread relations are measured, never forced.",
         pca_models=models, figures=[])
@@ -235,7 +235,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         "(diez indicadores). Los paneles inferiores muestran los dos indicadores fisicos usados "
         "para separar los grupos. fn puede afectar la proyeccion superior, pero no sus colores. "
         "Circulo: estable, X: inestable, rombo: no evaluado si existe. La estabilidad proviene "
-        "del criterio nativo de tension, amortiguamiento y angulo y no entra al ajuste.", "",
+        "del criterio nativo registrado en xi_groups_metadata.json y no entra al ajuste.", "",
         "| Ponderacion | Grupo | Casos | xi medio | Dispersion media | Estables | Inestables |",
         "|---|---|---:|---:|---:|---:|---:|",
     ]

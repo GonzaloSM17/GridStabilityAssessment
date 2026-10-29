@@ -104,6 +104,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     import matplotlib.pyplot as plt
     report = progress or (lambda message: None)
     points, cases = analysis.points, analysis.cases
+    criterion_label = "voltage + damping + angle" if analysis.include_angle else "voltage + damping; no angle"
     if not points: raise ValueError("No spatial controller points to export")
     if len({case.case_id for case in cases}) != len(cases): raise ValueError("Duplicate case assessment")
     case_map = {case.case_id: case for case in cases}
@@ -111,7 +112,6 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     if not mapped_case_ids.issubset(case_map): raise ValueError("Controller/assessment case mismatch")
     for case in cases:
         if case.assessment.status not in STATUS_DIRECTORIES: raise ValueError("Unknown dynamic-stability status")
-        if case.assessment.angular_status is None: raise ValueError("Spatial labels require the angular criterion")
     names = [_filename(case.case_id) for case in cases]
     if len(names) != len(set(names)): raise ValueError("Run names collide after filename normalization")
     unique = {}
@@ -225,7 +225,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
             units = " Hz" if metric=="fn_hz" else ""
             figure = _draw(selected,universe,metric,f"Run {case.case_id}: {'xi' if metric=='xi' else 'natural frequency'}",
-                           f"Dynamic stability: {case.assessment.status} (voltage + damping + angle)\n"
+                           f"Dynamic stability: {case.assessment.status} ({criterion_label})\n"
                            f"MVA-weighted included population = {value:.4f}{units}", bounds,(lo,hi),fn_edges,size_factor)
             path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
             try: figure.savefig(path,dpi=150)
@@ -239,7 +239,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     report(f"Spatial stability: saved {completed_maps}/{total_maps} individual maps")
     metadata = dict(source="Native GridStabilityAssessment parameters.csv and Parquet", assets_workbook=str(assets.workbook_path),
                     run_paths=[str(run.run_path) for run in runs], profile=asdict(profile),
-                    criterion="stability.dynamic_stability.assess_dynamic_stability with voltage, modal damping and angular status",
+                    criterion=analysis.criterion_description, include_angle=analysis.include_angle,
+                    voltage_scope=analysis.voltage_scope,
                     counts={status:sum(c.assessment.status==status for c in cases) for status in STATUS_DIRECTORIES},
                     mapped_counts={status:sum(c.assessment.status==status for c in mapped_cases) for status in STATUS_DIRECTORIES},
                     cases=len(cases),mapped_cases=len(mapped_cases),devices=len(unique),points=len(points),excluded_devices=len(analysis.excluded_devices),

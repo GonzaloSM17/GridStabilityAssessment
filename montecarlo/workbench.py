@@ -34,6 +34,7 @@ class MonteCarloWorkbench:
         self._pipeline: AnalysisPipeline | None = None
         self.dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
         self.spatial_stability_result = None
+        self._spatial_voltage_scope = "All available 220/500 kV buses"
         self.open_study(context_path, assets_path, scenario, profile)
 
     @property
@@ -62,6 +63,9 @@ class MonteCarloWorkbench:
         assets = Assets(assets_path)
         self.study = MonteCarloStudy(context, assets)
         self._pipeline = AnalysisPipeline(self.study, scenario, profile)
+        self.dynamic_stability_analysis = None
+        self.spatial_stability_result = None
+        self._spatial_voltage_scope = "All available 220/500 kV buses"
         return self._pipeline
 
     @staticmethod
@@ -203,6 +207,7 @@ class MonteCarloWorkbench:
             transfer_analysis,
         )
         logger.info("Starting spatial stability")
+        self._spatial_voltage_scope = "Selected Monte Carlo buses: " + ", ".join(buses)
         self.spatial_stability_result = self.create_spatial_stability()
 
         AnalysisReport(
@@ -228,21 +233,34 @@ class MonteCarloWorkbench:
         return study_analysis
 
     def create_spatial_stability(self, *, output_directory: str | Path | None = None):
-        """Create population maps with voltage, damping AND angular assessment per run.
+        """Map the same Monte Carlo voltage/damping labels used by the report.
 
-        This dedicated result does not relabel the existing batch reports, whose
-        legacy dynamic decision currently omits the angular criterion.
+        Reuse the selected-bus results from analyze(); dedicated spatial calls
+        evaluate voltage/damping themselves. Neither path evaluates angles.
         """
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.study is None:
             raise RuntimeError("Open a study before starting spatial analysis.")
         output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
         logger = self._analysis_logger()
+        native = getattr(self, "dynamic_stability_analysis", None)
+        case_assessments = None
+        if native is not None:
+            from stability.dynamic_stability import assess_monte_carlo_stability
+            cached = {item.run_id: item for item in native.run_assessments}
+            case_assessments = {
+                run.run_id: cached.get(run.run_id) or assess_monte_carlo_stability(
+                    run.run_id, "Not evaluated", "Not measurable")
+                for run in self.study.context.runs
+            }
         result = SpatialStabilityAnalyzer.create_optional(
             self.study.assets,
             self.pipeline.profile,
             self.study.context.runs,
             output,
+            include_angle=False,
+            case_assessments=case_assessments,
+            voltage_scope=self._spatial_voltage_scope,
             progress=logger.info,
         )
         if result.analysis is not None:

@@ -303,7 +303,8 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
     _csv(out/"case_features.csv", input_rows, ["basis", "case_id", "status", *FEATURE_NAMES])
     metadata = dict(status=result["status"], reason=result["reason"], n_cases=len(ids),
         stable=int(np.sum(y == 0)), unstable=int(np.sum(y == 1)), excluded=excluded,
-        native_criterion="Existing voltage + modal damping + angle aggregation, unchanged",
+        native_criterion=("Existing voltage + modal damping + angle aggregation, unchanged"
+                          if analysis.include_angle else analysis.criterion_description),
         selection_metric="Inner-fold log loss; family and indicator set selected before outer test",
         case_ids=list(ids), feature_sets={key:[FEATURE_NAMES[i] for i in cols] for key,cols in SETS.items()},
         missing_correlation="Training-fold median imputation plus missingness indicator; never imputed using test cases",

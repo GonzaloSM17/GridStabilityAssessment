@@ -447,8 +447,9 @@ def export_clustering(analysis, output_directory, *, low_xi_threshold=.7, min_ce
                     not_evaluated=counts["Not evaluated"],
                     unstable_fraction_evaluated=counts["Unstable"] / known if known else None,
                     voltage_failures=sum(a.voltage_status == "Unstable" for a in selected),
-                    damping_failures=sum(a.modal_damping_status not in
-                        {"Damped", "Not measurable", "Not applicable", "Not evaluated"} for a in selected),
+                    damping_failures=sum(a.modal_damping_status == "Growing" or
+                        (a.angular_status is not None and a.modal_damping_status == "Damped under")
+                        for a in selected),
                     angular_failures=sum(a.angular_status == "Unstable" for a in selected)))
         _csv(out / "cluster_profiles.csv", centroid_rows, list(centroid_rows[0]))
         _csv(out / "cluster_stability.csv", stability_rows, list(stability_rows[0]))
