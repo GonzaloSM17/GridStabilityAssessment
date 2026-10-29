@@ -291,6 +291,15 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         ids = {case.case_id for case in mapped_cases if case.assessment.status == status}
         averages, rows = mean_points(points, ids)
         groups[status] = (ids, averages, rows)
+    mean_xi_values = [
+        point.xi
+        for status in PLOT_STATUSES
+        for point in groups[status][1]
+    ]
+    mean_xi_lower, mean_xi_upper, mean_xi_ticks = _nice_numeric_scale(
+        mean_xi_values or list(xi_limits)
+    )
+    mean_xi_limits = (mean_xi_lower, mean_xi_upper)
     stable_rows = {row["device_id"]: row for row in groups["Stable"][2]}
     unstable_rows = {row["device_id"]: row for row in groups["Unstable"][2]}
     comparison = []
@@ -350,8 +359,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             universe,
             metric,
             bounds,
-            xi_limits,
-            xi_ticks,
+            mean_xi_limits if metric == "xi" else xi_limits,
+            mean_xi_ticks if metric == "xi" else xi_ticks,
             fn_edges,
             size_factor,
             len(groups["Stable"][0]),
@@ -412,7 +421,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                     skipped_runs=[asdict(item) for item in analysis.skipped_runs],
                     xi_formula="Kp/(2*sqrt(Ki))",fn_formula_hz="sqrt(Ki)/(2*pi)",frequency_bands=FN_LABELS,
                     frequency_boundary_rule="lower inclusive, upper exclusive; final band >=20 Hz",
-                    xi_color_limits=list(xi_limits),xi_color_ticks=list(xi_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
+                    xi_color_limits=list(xi_limits),xi_color_ticks=list(xi_ticks),xi_mean_color_limits=list(mean_xi_limits),xi_mean_color_ticks=list(mean_xi_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
                     group_membership={status:sorted(group[0]) for status,group in groups.items()},
                     weighting="Point area proportional to MVA; repeated active controllers share asset MVA. Equal case weight per active unit for class means. Population mean weighted by MVA per run then equally across runs.",
                     missing_data="Missing evidence is retained as Not evaluated according to native aggregation; not included in Stable means. Excluded coordinates/assets listed in excluded_devices.csv.",
