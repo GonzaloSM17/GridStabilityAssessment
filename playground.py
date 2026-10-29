@@ -10,10 +10,7 @@ from stability.scenario import ContingencyScenario
 if __name__ == "__main__":
     # Set input/output paths to None to select them with dialogs.
     context_path = None
-    assets_path = (
-        r"C:\Users\kelly.allendes\Downloads"
-        r"\Assets_Coordenates\EMTP Assets_v2026.xlsx"
-    )
+    assets_path = None
     output_path = None
     run_characterization = True
     characterization_repeats = 5
@@ -43,9 +40,13 @@ if __name__ == "__main__":
         and spatial_result.analysis is not None
         and spatial_result.analysis.points
     ):
-        from montecarlo.spatial_stability.characterization import export_characterization
+        from montecarlo.spatial_stability.characterization import (
+            export_characterization,
+        )
+
         characterization_figures = export_characterization(
-            spatial_result.analysis, spatial_result.output_directory,
+            spatial_result.analysis,
+            spatial_result.output_directory,
             repeats=characterization_repeats,
         )
         print(

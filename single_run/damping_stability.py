@@ -271,7 +271,20 @@ class SingleRunDampingStability:
                 if mode.damping_ratio is not None
             ]
         )
-        figure, axis = plt.subplots(figsize=(12.5, max(4.5, 0.65 * len(analysis.records) + 2.5)))
+        measurable_records = [
+            record
+            for record in analysis.records
+            if (
+                record.assessment.dominant_damping_ratio is not None
+                if dominant_only
+                else any(mode.damping_ratio is not None for mode in record.assessment.modes)
+            )
+        ]
+        # Match the compact Monte Carlo damping summaries: these categorical
+        # plots do not need the previous generous vertical spacing.
+        figure, axis = plt.subplots(
+            figsize=(12, max(4.2, 0.60 * len(measurable_records) + 2.0))
+        )
         if not records:
             self._not_available(axis, "No measurable electromechanical modes")
             axis.set_axis_off()
@@ -283,15 +296,6 @@ class SingleRunDampingStability:
             vmax=criteria.mode_maximum_frequency_hz,
         )
         labels = []
-        measurable_records = [
-            record
-            for record in analysis.records
-            if (
-                record.assessment.dominant_damping_ratio is not None
-                if dominant_only
-                else any(mode.damping_ratio is not None for mode in record.assessment.modes)
-            )
-        ]
         for row, record in enumerate(measurable_records):
             modes = (
                 [record.assessment.dominant_mode]
@@ -336,7 +340,7 @@ class SingleRunDampingStability:
         )
         color_bar.set_label("EM mode frequency (Hz)", fontsize=9)
         color_bar.ax.tick_params(labelsize=8)
-        figure.subplots_adjust(left=0.27, right=0.90, bottom=0.17, top=0.88)
+        figure.subplots_adjust(left=0.24, right=0.89, bottom=0.11, top=0.91)
         return figure
 
     @staticmethod

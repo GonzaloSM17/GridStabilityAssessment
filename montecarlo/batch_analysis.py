@@ -784,8 +784,10 @@ class AnalysisPipeline:
             for transfer_name in transfer_names
             if any(name == transfer_name for name, _ in records)
         )
+        # Keep the two damping-distribution figures compact: transfer labels are
+        # multiline, but the previous height left excessive space between rows.
         figure, axis = plt.subplots(
-            figsize=(12, max(4.2, 0.75 * len(evaluated_transfer_names) + 2.5))
+            figsize=(12, max(4.2, 0.60 * len(evaluated_transfer_names) + 2.0))
         )
         reference_criteria = next(
             assessment.criteria
@@ -856,8 +858,15 @@ class AnalysisPipeline:
                 va="bottom",
                 fontsize=8,
             )
-        figure.suptitle(title)
-        figure.tight_layout(rect=(0.0, 0.06 if excluded_transfer_count else 0.0, 1.0, 0.95))
+        figure.suptitle(title, y=0.975)
+        # Explicit bounds use the canvas more efficiently than tight_layout for
+        # this long categorical axis and its adjacent frequency colour bar.
+        figure.subplots_adjust(
+            left=0.23,
+            right=0.89,
+            bottom=0.12 if excluded_transfer_count else 0.10,
+            top=0.91,
+        )
         return figure
 
     def plot_worst_transfer_damping_cases(

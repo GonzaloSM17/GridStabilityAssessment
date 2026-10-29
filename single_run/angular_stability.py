@@ -150,13 +150,17 @@ class SingleRunAngularStability:
         axis.axhline(0.0, color="#5E6472", linewidth=0.75)
         limit = angular_excursion_limit(calculation.excursions)
         axis.set_yticks(angular_excursion_ticks(limit))
-        axis.set(xlim=(0.0, self.run.dataset.maximum_time_s()), ylim=(-limit, limit), xlabel="Time (s)", ylabel="Angular excursion, Δδ (deg)")
+        axis.set(xlim=(0.0, self._plot_end_time_s()), ylim=(-limit, limit), xlabel="Time (s)", ylabel="Angular excursion, Δδ (deg)")
         self._style_axis(axis)
 
     def _style_axis(self, axis) -> None:
         axis.axvspan(self.scenario.fault_time_s, self.scenario.clearance_time_s, color="#F0B323", alpha=0.16, zorder=0)
-        axis.set_xlim(0.0, self.run.dataset.maximum_time_s())
+        axis.set_xlim(0.0, self._plot_end_time_s())
         axis.set_facecolor("white")
         axis.grid(visible=True, color="#D6D9DC", linewidth=0.55, alpha=0.8)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
+
+    def _plot_end_time_s(self) -> float:
+        """Return the available simulation time, capped at ten seconds."""
+        return min(self.run.dataset.maximum_time_s(), 10.0)
