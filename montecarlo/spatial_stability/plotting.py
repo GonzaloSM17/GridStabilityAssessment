@@ -89,6 +89,11 @@ def _frequency_labels(fn_edges):
     )
 
 
+def _mva_legend_label(value):
+    """Present marker-size references as whole MVA values."""
+    return f"{value:.0f} MVA"
+
+
 def _draw_mean_comparison(
     stable_points,
     unstable_points,
@@ -125,7 +130,7 @@ def _draw_mean_comparison(
     handles = [
         axes[0].scatter(
             [], [], s=value * size_factor, facecolors="none", edgecolors="grey",
-            label=f"{value:g} MVA",
+            label=_mva_legend_label(value),
         )
         for value in sizes
     ]
@@ -190,7 +195,7 @@ def _draw_mean_comparison(
     return figure
 
 
-def _draw(points, universe, metric, title, subtitle, bounds, xi_limits, fn_edges, size_factor, scale_context="Common scales across runs"):
+def _draw(points, universe, metric, title, subtitle, bounds, xi_limits, xi_ticks, fn_edges, size_factor, scale_context="Common scales across runs"):
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.colors import BoundaryNorm, Normalize
@@ -210,18 +215,20 @@ def _draw(points, universe, metric, title, subtitle, bounds, xi_limits, fn_edges
                            s=[p.nominal_power_mva*size_factor for p in points],
                            c=[getattr(p, metric) for p in points], cmap=cmap, norm=norm,
                            edgecolors="black", linewidths=.4)
-    if metric == "xi": figure.colorbar(scatter, ax=axis, shrink=.65, label=label)
+    if metric == "xi":
+        bar = figure.colorbar(scatter, ax=axis, shrink=.65, label=label)
+        bar.set_ticks(xi_ticks)
     else:
         ticks = (np.array(fn_edges[:-1])+np.array(fn_edges[1:]))/2
         bar = figure.colorbar(scatter, ax=axis, shrink=.65, boundaries=fn_edges, ticks=ticks, spacing="uniform")
-        bar.ax.set_yticklabels(FN_LABELS); bar.set_label(label)
+        bar.ax.set_yticklabels(_frequency_labels(fn_edges)); bar.set_label(label)
     if not points:
         axis.text(.5, .5, "NO CASES IN THIS CLASS", ha="center", transform=axis.transAxes,
                   bbox=dict(facecolor="white", alpha=.9, edgecolor="grey"))
     sizes = sorted({min(p.nominal_power_mva for p in universe),
                     float(np.median([p.nominal_power_mva for p in universe])),
                     max(p.nominal_power_mva for p in universe)})
-    handles = [axis.scatter([], [], s=value*size_factor, facecolors="none", edgecolors="grey", label=f"{value:g} MVA") for value in sizes]
+    handles = [axis.scatter([], [], s=value*size_factor, facecolors="none", edgecolors="grey", label=_mva_legend_label(value)) for value in sizes]
     axis.legend(handles=handles, title="Area proportional to MVA", loc="upper left", fontsize=8)
     axis.set_xlim(bounds[:2]); axis.set_ylim(bounds[2:]); axis.set_aspect("equal", adjustable="box")
     axis.set_xlabel("posX (EMTP drawing units)"); axis.set_ylabel("posY (EMTP drawing units)")
@@ -255,8 +262,10 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     ymin, ymax = min(p.y for p in scale_points), max(p.y for p in scale_points)
     dx, dy = max((xmax-xmin)*.08,1.), max((ymax-ymin)*.08,1.)
     bounds = (xmin-dx,xmax+dx,ymin-dy,ymax+dy)
-    lo, hi = min(p.xi for p in scale_points), max(p.xi for p in scale_points)
-    if lo == hi: hi = lo+1.
+    xi_lower, xi_upper, xi_ticks = _nice_numeric_scale(
+        [point.xi for point in scale_points]
+    )
+    xi_limits = (xi_lower, xi_upper)
     fn_edges = [0.,2.,5.,10.,20.,max(30.,ceil(max(p.fn_hz for p in scale_points)/10)*10.)]
     size_factor = 450./max(p.nominal_power_mva for p in scale_points)
     out = Path(output_directory).expanduser().resolve()
@@ -282,10 +291,6 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         ids = {case.case_id for case in mapped_cases if case.assessment.status == status}
         averages, rows = mean_points(points, ids)
         groups[status] = (ids, averages, rows)
-    group_xi = [point.xi for status, (_, averages, _) in groups.items()
-                if status in PLOT_STATUSES for point in averages]
-    group_lower, group_upper, group_ticks = _nice_numeric_scale(group_xi or [lo, hi])
-    group_limits = (group_lower, group_upper)
     stable_rows = {row["device_id"]: row for row in groups["Stable"][2]}
     unstable_rows = {row["device_id"]: row for row in groups["Unstable"][2]}
     comparison = []
@@ -345,8 +350,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             universe,
             metric,
             bounds,
-            group_limits,
-            group_ticks,
+            xi_limits,
+            xi_ticks,
             fn_edges,
             size_factor,
             len(groups["Stable"][0]),
@@ -383,7 +388,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             units = " Hz" if metric=="fn_hz" else ""
             figure = _draw(selected,universe,metric,f"Run {case.case_id}: {'xi' if metric=='xi' else 'natural frequency'}",
                            f"Dynamic stability: {case.assessment.status} ({criterion_label})\n"
-                           f"MVA-weighted included population = {value:.4f}{units}", bounds,(lo,hi),fn_edges,size_factor)
+                           f"MVA-weighted included population = {value:.3f}{units}", bounds,xi_limits,xi_ticks,fn_edges,size_factor)
             path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
             try: figure.savefig(path,dpi=150)
             finally: plt.close(figure)
@@ -407,7 +412,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                     skipped_runs=[asdict(item) for item in analysis.skipped_runs],
                     xi_formula="Kp/(2*sqrt(Ki))",fn_formula_hz="sqrt(Ki)/(2*pi)",frequency_bands=FN_LABELS,
                     frequency_boundary_rule="lower inclusive, upper exclusive; final band >=20 Hz",
-                    xi_color_limits=[lo,hi],xi_group_color_limits=list(group_limits),xi_group_color_ticks=list(group_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
+                    xi_color_limits=list(xi_limits),xi_color_ticks=list(xi_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
                     group_membership={status:sorted(group[0]) for status,group in groups.items()},
                     weighting="Point area proportional to MVA; repeated active controllers share asset MVA. Equal case weight per active unit for class means. Population mean weighted by MVA per run then equally across runs.",
                     missing_data="Missing evidence is retained as Not evaluated according to native aggregation; not included in Stable means. Excluded coordinates/assets listed in excluded_devices.csv.",
