@@ -30,6 +30,7 @@ class StabilityCriteria:
     crisis_voltage_threshold_pu: float = 0.70
     low_voltage_threshold_pu: float = 0.80
     maximum_cumulative_low_voltage_duration_s: float = 1.0
+    low_voltage_no_reentry_after_fault_s: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,10 @@ def assess_stability(
         raise ValueError(
             "The cumulative low-voltage duration limit must not be negative."
         )
+    if criteria.low_voltage_no_reentry_after_fault_s < 0:
+        raise ValueError(
+            "The low-voltage no-reentry time after the fault must not be negative."
+        )
     if len(time_values) != len(signal_values):
         raise ValueError("Time and signal values must have the same length.")
 
@@ -395,6 +400,15 @@ def assess_stability(
     is_low_voltage_duration_compliant = (
         cumulative_low_voltage_duration_s
         <= criteria.maximum_cumulative_low_voltage_duration_s
+        and _first_entry_time_into_critical_region(
+            _samples_from_time(
+                samples,
+                criteria.fault_time_s
+                + criteria.low_voltage_no_reentry_after_fault_s,
+            ),
+            criteria.low_voltage_threshold_pu,
+        )
+        is None
     )
     return StabilityAssessment(
         pre_fault_reference_value=pre_fault_reference_value,

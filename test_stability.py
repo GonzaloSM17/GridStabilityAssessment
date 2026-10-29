@@ -44,6 +44,18 @@ class StabilityAssessmentTests(unittest.TestCase):
         self.assertAlmostEqual(result.cumulative_low_voltage_duration_s, 1.099, places=3)
         self.assertFalse(result.is_low_voltage_duration_compliant)
 
+    def test_late_080_pu_reentry_fails_the_existing_low_voltage_criterion(self):
+        voltage = [1.0] * len(self.time)
+        for index, time in enumerate(self.time):
+            if 2.3 <= time < 2.31:
+                voltage[index] = 0.79
+
+        result = self.assess(voltage)
+
+        self.assertLess(result.cumulative_low_voltage_duration_s, 1.0)
+        self.assertFalse(result.is_low_voltage_duration_compliant)
+        self.assertIn("Cumulative time below 0.80 pu", result.failed_criteria)
+
     def test_crisis_voltage_uses_the_final_post_clearance_upward_crossing(self):
         voltage = [1.0] * len(self.time)
         for index, time in enumerate(self.time):
