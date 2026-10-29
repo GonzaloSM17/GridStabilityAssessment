@@ -34,6 +34,7 @@ class SpatialStabilityAnalysis:
     excluded_devices: tuple[dict, ...] = ()
     skipped_runs: tuple["SpatialSkippedRun", ...] = ()
     voltage_scope: str = "All available 220/500 kV buses"
+    monte_carlo_policy: bool = False
 
     @property
     def include_angle(self):
@@ -41,6 +42,12 @@ class SpatialStabilityAnalysis:
 
     @property
     def criterion_description(self):
+        if self.monte_carlo_policy:
+            return (
+                "Monte Carlo: Unstable if voltage is Unstable, modal damping is "
+                "Growing, or angular stability is Unstable; Damped under is "
+                "grouped with Stable."
+            )
         if self.include_angle:
             return "Native dynamic stability: voltage + modal damping + angle"
         return ("Monte Carlo: Unstable if voltage is Unstable or modal damping is Growing; "

@@ -257,6 +257,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     metadata = dict(source="Native GridStabilityAssessment parameters.csv and Parquet", assets_workbook=str(assets.workbook_path),
                     run_paths=[str(run.run_path) for run in runs], profile=asdict(profile),
                     criterion=analysis.criterion_description, include_angle=analysis.include_angle,
+                    monte_carlo_policy=analysis.monte_carlo_policy,
                     voltage_scope=analysis.voltage_scope,
                     counts={status:sum(c.assessment.status==status for c in cases) for status in STATUS_DIRECTORIES},
                     mapped_counts={status:sum(c.assessment.status==status for c in mapped_cases) for status in STATUS_DIRECTORIES},

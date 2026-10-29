@@ -1,7 +1,12 @@
 """Manual workbench for opening studies and running selected analysis operations."""
 
+from copy import copy
 from pathlib import Path
 
+from montecarlo.angular_stability import (
+    AngularStabilityResult,
+    MonteCarloAngularStability,
+)
 from montecarlo.batch_analysis import (
     AnalysisPipeline,
     BusStudyAnalysis,
@@ -33,7 +38,9 @@ class MonteCarloWorkbench:
         self.study: MonteCarloStudy | None = None
         self._pipeline: AnalysisPipeline | None = None
         self.dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
+        self.angular_stability_result: AngularStabilityResult | None = None
         self.spatial_stability_result = None
+        self._run_selection: tuple[int | None, int, int] = (None, 0, 0)
         self._spatial_voltage_scope = "All available 220/500 kV buses"
         self.open_study(context_path, assets_path, scenario, profile)
 
@@ -64,7 +71,9 @@ class MonteCarloWorkbench:
         self.study = MonteCarloStudy(context, assets)
         self._pipeline = AnalysisPipeline(self.study, scenario, profile)
         self.dynamic_stability_analysis = None
+        self.angular_stability_result = None
         self.spatial_stability_result = None
+        self._run_selection = (None, len(self.study.context.runs), len(self.study.context.runs))
         self._spatial_voltage_scope = "All available 220/500 kV buses"
         return self._pipeline
 
@@ -137,6 +146,7 @@ class MonteCarloWorkbench:
         *,
         buses: tuple[str, ...],
         show_figures: bool = False,
+        max_runs: int | None = None,
     ) -> StudyAnalysis:
         """Analyze selected buses, publish local artefacts, and return their result."""
         if self.study is None:
@@ -146,10 +156,24 @@ class MonteCarloWorkbench:
         if len(buses) != len(set(buses)):
             raise ValueError("A bus may be selected only once.")
 
+        self._activate_run_limit(max_runs)
         logger = self._analysis_logger()
+        requested_runs, available_runs, analyzed_runs = self._run_selection
+        if requested_runs is not None and requested_runs > available_runs:
+            logger.warning(
+                "Requested %d run(s), but only %d are available; analyzing all available runs.",
+                requested_runs,
+                available_runs,
+            )
+        logger.info(
+            "Run selection: requested=%s, available=%d, analyzed=%d",
+            requested_runs if requested_runs is not None else "all",
+            available_runs,
+            analyzed_runs,
+        )
         logger.info(
             "Starting Monte Carlo analysis for %d run(s); selected buses: %s",
-            len(self.study.context.runs),
+            analyzed_runs,
             ", ".join(buses),
         )
         self._show_figures = show_figures
@@ -179,11 +203,20 @@ class MonteCarloWorkbench:
         high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
         logger.info("Active-power transfer analysis completed")
 
+        logger.info("Starting angular stability")
+        self.angular_stability_result = self.create_angular_stability()
+        logger.info("Angular stability completed")
+        self.dynamic_stability_analysis = self.pipeline.analyze_contingency_dynamic_stability(
+            study_analysis,
+            transfer_analysis,
+            self.angular_stability_result.analysis,
+        )
         controller_output_directory = self.controller_output_directory()
         self.save_figure(
             self.pipeline.plot_controller_population(
                 controller_analysis,
                 study_analysis,
+                self.dynamic_stability_analysis,
             ),
             controller_output_directory,
             "01_population.png",
@@ -192,20 +225,14 @@ class MonteCarloWorkbench:
             self.pipeline.plot_weighted_controllers(
                 controller_analysis,
                 study_analysis,
+                self.dynamic_stability_analysis,
             ),
             controller_output_directory,
             "02_weighted.png",
         )
-
         for bus_analysis in study_analysis.bus_analyses:
             self._publish_bus_analysis(bus_analysis, controller_analysis)
-
         self._publish_transfer_analysis(transfer_analysis, high_frequency_analysis)
-
-        self.dynamic_stability_analysis = self.pipeline.analyze_contingency_dynamic_stability(
-            study_analysis,
-            transfer_analysis,
-        )
         logger.info("Starting spatial stability")
         self._spatial_voltage_scope = "Selected Monte Carlo buses: " + ", ".join(buses)
         self.spatial_stability_result = self.create_spatial_stability()
@@ -215,6 +242,7 @@ class MonteCarloWorkbench:
             transfer_analysis,
             high_frequency_analysis,
             self.dynamic_stability_analysis,
+            angular_stability_analysis=self.angular_stability_result.analysis,
             scenario=self.pipeline.scenario,
             profile=self.pipeline.profile,
             spatial_stability=self.spatial_stability_result,
@@ -233,15 +261,15 @@ class MonteCarloWorkbench:
         return study_analysis
 
     def create_spatial_stability(self, *, output_directory: str | Path | None = None):
-        """Map the same Monte Carlo voltage/damping labels used by the report.
+        """Map the same Monte Carlo voltage/damping/angular labels used by the report.
 
-        Reuse the selected-bus results from analyze(); dedicated spatial calls
-        evaluate voltage/damping themselves. Neither path evaluates angles.
+        Reuse available global classifications; a dedicated spatial call evaluates
+        all three criteria through the Monte Carlo policy.
         """
         from montecarlo.spatial_stability import SpatialStabilityAnalyzer
         if self.study is None:
             raise RuntimeError("Open a study before starting spatial analysis.")
-        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "04_spatial_stability"
+        output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "05_Spatial_Stability"
         logger = self._analysis_logger()
         native = getattr(self, "dynamic_stability_analysis", None)
         case_assessments = None
@@ -251,14 +279,15 @@ class MonteCarloWorkbench:
             case_assessments = {
                 run.run_id: cached.get(run.run_id) or assess_monte_carlo_stability(
                     run.run_id, "Not evaluated", "Not measurable")
-                for run in self.study.context.runs
+                for run in self.pipeline.context.runs
             }
         result = SpatialStabilityAnalyzer.create_optional(
             self.study.assets,
             self.pipeline.profile,
-            self.study.context.runs,
+            self.pipeline.context.runs,
             output,
-            include_angle=False,
+            include_angle=True,
+            monte_carlo_policy=True,
             case_assessments=case_assessments,
             voltage_scope=self._spatial_voltage_scope,
             progress=logger.info,
@@ -277,6 +306,56 @@ class MonteCarloWorkbench:
                 skipped_count,
             )
         return result
+
+    def create_angular_stability(
+        self,
+        *,
+        output_directory: str | Path | None = None,
+    ) -> AngularStabilityResult:
+        """Evaluate selected runs under ``04_Angular_Stability``."""
+        if self.study is None:
+            raise RuntimeError("Open a study before starting angular stability.")
+        output = (
+            Path(output_directory)
+            if output_directory is not None
+            else self.analysis_output_directory() / "04_Angular_Stability"
+        )
+        result = MonteCarloAngularStability(
+            tuple(self.pipeline.context.runs),
+            self.pipeline.scenario,
+            self.study.assets,
+        ).create(output)
+        unavailable = sum(
+            item.status == "Not evaluated"
+            for item in result.analysis.run_assessments
+        )
+        if unavailable:
+            self._analysis_logger().warning(
+                "Angular stability was not evaluated for %d run(s).",
+                unavailable,
+            )
+        return result
+
+    def _activate_run_limit(self, max_runs: int | None) -> None:
+        """Activate the first ordered run subset for every analysis artefact."""
+        if self.study is None:
+            raise RuntimeError("Open a study before selecting Monte Carlo runs.")
+        if isinstance(max_runs, bool) or (max_runs is not None and max_runs <= 0):
+            raise ValueError("max_runs must be a positive integer or None.")
+        if max_runs is not None and not isinstance(max_runs, int):
+            raise TypeError("max_runs must be an integer or None.")
+        available = tuple(self.study.context.runs)
+        selected = available if max_runs is None else available[:max_runs]
+        limited_context = copy(self.study.context)
+        limited_context.runs = list(selected)
+        self._pipeline = AnalysisPipeline(
+            MonteCarloStudy(limited_context, self.study.assets),
+            profile=self.pipeline.profile,
+        )
+        self.dynamic_stability_analysis = None
+        self.angular_stability_result = None
+        self.spatial_stability_result = None
+        self._run_selection = (max_runs, len(available), len(selected))
 
     def plot_power_transfers(
         self,
@@ -311,7 +390,7 @@ class MonteCarloWorkbench:
         end_time_s: float | None = None,
     ) -> tuple[Path, ...]:
         """Publish the overview, damping distribution, and worst-case evidence."""
-        output_directory = self.analysis_output_directory() / "03_transfers"
+        output_directory = self.analysis_output_directory() / "03_Transfer_Stability"
         output_directory.mkdir(parents=True, exist_ok=True)
         figures = [
             (
@@ -437,35 +516,17 @@ class MonteCarloWorkbench:
 
     def controller_output_directory(self) -> Path:
         """Return the dedicated output directory for study-wide controller figures."""
-        output_directory = self.analysis_output_directory() / "01_controllers"
+        output_directory = self.analysis_output_directory() / "01_Controllers"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 
     def bus_output_directory(self, bus_name: str) -> Path:
-        """Return one direct, numbered output directory for a discovered bus."""
+        """Return the dedicated voltage directory for one selected bus."""
         if self.study is None:
             raise RuntimeError("Open a study before requesting a bus output directory.")
 
         bus = self.study.bus(bus_name)
-        root_directory = self.analysis_output_directory()
-        existing_directories = [
-            path for path in root_directory.iterdir() if path.is_dir()
-        ]
-        bus_suffix = f"_{bus.name}"
-        existing_directory = next(
-            (path for path in existing_directories if path.name.endswith(bus_suffix)),
-            None,
-        )
-        if existing_directory is not None:
-            return existing_directory
-
-        directory_numbers = [
-            int(path.name.split("_", 1)[0])
-            for path in existing_directories
-            if path.name.split("_", 1)[0].isdigit()
-        ]
-        bus_number = max(directory_numbers, default=1) + 1
-        output_directory = root_directory / f"{bus_number:02d}_{bus.name}"
+        output_directory = self.analysis_output_directory() / f"02_{bus.name}"
         output_directory.mkdir(parents=True, exist_ok=True)
         return output_directory
 

@@ -212,7 +212,7 @@ class SpatialStabilityTests(unittest.TestCase):
         self.assertEqual(row["status"],"Stable");self.assertEqual(row["angular_status"],"Stable")
         self.assertEqual(json.loads((result.output_directory/"spatial_metadata.json").read_text())["cases"],1)
 
-    def test_study_selectors_and_maps_use_monte_carlo_voltage_and_damping(self):
+    def test_study_selectors_and_maps_use_monte_carlo_voltage_damping_and_angle(self):
         from montecarlo.workbench import MonteCarloWorkbench
         study_path=self.root/"study"
         study_path.mkdir();(study_path/"manifest.json").write_text("{}")
@@ -230,13 +230,16 @@ class SpatialStabilityTests(unittest.TestCase):
             workbench=MonteCarloWorkbench()
         context_picker.assert_called_once_with();assets_picker.assert_called_once_with()
         result=workbench.create_spatial_stability()
-        self.assertEqual(result.output_directory,(study_path/"analysis_outputs/04_spatial_stability").resolve())
+        self.assertEqual(result.output_directory,(study_path/"analysis_outputs/05_Spatial_Stability").resolve())
         self.assertEqual(len(result.figure_paths),13)
         self.assertEqual([case.assessment.status for case in result.analysis.cases],["Stable","Unstable"])
         metadata=json.loads((result.output_directory/"spatial_metadata.json").read_text())
         self.assertEqual(metadata["counts"],{"Stable":1,"Unstable":1,"Not evaluated":0})
-        self.assertFalse(metadata["include_angle"])
-        self.assertTrue(all(c.assessment.angular_status is None for c in result.analysis.cases))
+        self.assertTrue(metadata["include_angle"])
+        self.assertEqual(
+            [case.assessment.angular_status for case in result.analysis.cases],
+            ["Stable", "Unstable"],
+        )
         self.assertTrue(all(p.is_file() for p in result.figure_paths))
         self.assertEqual(len(list((result.output_directory/"distributions_by_stability").glob("*.png"))),5)
         clustering=json.loads((result.output_directory/"clustering/clustering_metadata.json").read_text(encoding="utf-8"))

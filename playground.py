@@ -12,6 +12,9 @@ if __name__ == "__main__":
     context_path = None
     assets_path = None
     output_path = None
+    # Set to a positive integer to analyze only the first ordered runs.
+    # Keep None to analyze the whole Monte Carlo study.
+    max_runs = None
     run_characterization = True
     characterization_repeats = 5
     buses = ("KIMAL_220",)
@@ -27,7 +30,7 @@ if __name__ == "__main__":
     workbench = MonteCarloWorkbench(context_path, assets_path, scenario)
     workbench.select_output_directory(output_path)
     # Save outputs without opening interactive figure windows.
-    workbench.analyze(buses=buses, show_figures=False)
+    workbench.analyze(buses=buses, show_figures=False, max_runs=max_runs)
     spatial_result = workbench.spatial_stability_result
     print(
         f"Spatial stability: {spatial_result.status}; "

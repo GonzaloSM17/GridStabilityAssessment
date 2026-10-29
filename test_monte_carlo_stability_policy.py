@@ -1,4 +1,4 @@
-"""Monte Carlo labels are voltage OR Growing, with low positive damping retained."""
+"""Monte Carlo labels use voltage, damping, and angular stability."""
 import csv
 import json
 from pathlib import Path
@@ -46,6 +46,14 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
         self.assertEqual(assess_dynamic_stability(1, "Stable", "Damped", "Unstable").status,
                          "Unstable")
 
+    def test_angular_failure_or_missing_angular_evidence_updates_monte_carlo_status(self):
+        unstable = assess_monte_carlo_stability(1, "Stable", "Damped", "Unstable")
+        self.assertEqual(unstable.status, "Unstable")
+        self.assertEqual(unstable.angular_status, "Unstable")
+        unavailable = assess_monte_carlo_stability(1, "Stable", "Damped", "Not evaluated")
+        self.assertEqual(unavailable.status, "Not evaluated")
+        self.assertEqual(unavailable.angular_status, "Not evaluated")
+
     def test_batch_pipeline_uses_the_same_monte_carlo_rule(self):
         study = NS(run_ids=(1, 2, 3), status_for_run=lambda run_id: {
             1: "Stable", 2: "Not evaluated", 3: "Unstable"}[run_id])
@@ -55,6 +63,18 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
         self.assertEqual([a.status for a in result.run_assessments],
                          ["Stable", "Unstable", "Unstable"])
         self.assertTrue(all(a.angular_status is None for a in result.run_assessments))
+
+    def test_batch_pipeline_includes_angular_status_when_supplied(self):
+        study = NS(run_ids=(1, 2), status_for_run=lambda run_id: "Stable")
+        transfers = NS(modal_damping_status_for_run=lambda run_id: "Damped")
+        angular = NS(status_for_run=lambda run_id: {1: "Stable", 2: "Unstable"}[run_id])
+        result = AnalysisPipeline.analyze_contingency_dynamic_stability(
+            study,
+            transfers,
+            angular,
+        )
+        self.assertEqual([item.status for item in result.run_assessments], ["Stable", "Unstable"])
+        self.assertEqual([item.angular_status for item in result.run_assessments], ["Stable", "Unstable"])
 
     def test_monte_carlo_assessment_does_not_calculate_or_use_angle(self):
         with TemporaryDirectory() as directory:
@@ -103,7 +123,25 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
             self.assertIsNone(workbench.dynamic_stability_analysis)
             self.assertEqual(workbench._spatial_voltage_scope, "All available 220/500 kV buses")
 
-    def test_workbench_reuses_selected_bus_labels_and_exports_reloadable_groups_without_angle(self):
+    def test_run_limit_uses_the_first_ordered_runs_and_caps_at_availability(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = make_assets(root / "assets.xlsx")
+            study = root / "study"
+            study.mkdir()
+            (study / "manifest.json").write_text("{}")
+            for run_id in (1, 2, 3):
+                write_parameters(study / "runs" / f"run_{run_id:06d}")
+                write_parquet(study / "runs" / f"run_{run_id:06d}")
+            workbench = MonteCarloWorkbench(study, assets.workbook_path)
+            workbench._activate_run_limit(2)
+            self.assertEqual([run.run_id for run in workbench.pipeline.context.runs], [1, 2])
+            self.assertEqual(workbench._run_selection, (2, 3, 2))
+            workbench._activate_run_limit(500)
+            self.assertEqual([run.run_id for run in workbench.pipeline.context.runs], [1, 2, 3])
+            self.assertEqual(workbench._run_selection, (500, 3, 3))
+
+    def test_workbench_reuses_global_labels_and_exports_reloadable_groups_with_angle(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             assets = make_assets(root / "assets.xlsx")
@@ -115,9 +153,9 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
                 write_parquet(study / "runs" / f"run_{i:06d}")
             workbench = MonteCarloWorkbench(study, assets.workbook_path)
             expected = (
-                assess_monte_carlo_stability(1, "Stable", "Damped under"),
-                assess_monte_carlo_stability(2, "Stable", "Growing"),
-                assess_monte_carlo_stability(3, "Not evaluated", "Damped"),
+                assess_monte_carlo_stability(1, "Stable", "Damped under", "Stable"),
+                assess_monte_carlo_stability(2, "Stable", "Growing", "Stable"),
+                assess_monte_carlo_stability(3, "Not evaluated", "Damped", "Not evaluated"),
             )
             workbench.dynamic_stability_analysis = ContingencyDynamicStabilityAnalysis(expected)
             workbench._spatial_voltage_scope = "Selected Monte Carlo buses: KIMAL_220"
@@ -125,9 +163,9 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
                        side_effect=AssertionError("Do not re-evaluate Parquet or angles")):
                 result = workbench.create_spatial_stability()
             self.assertEqual([c.assessment for c in result.analysis.cases], list(expected))
-            self.assertFalse(result.analysis.include_angle)
+            self.assertTrue(result.analysis.include_angle)
             metadata = json.loads((result.output_directory / "spatial_metadata.json").read_text())
-            self.assertFalse(metadata["include_angle"])
+            self.assertTrue(metadata["include_angle"])
             self.assertIn("KIMAL_220", metadata["voltage_scope"])
             self.assertEqual(metadata["counts"], {"Stable": 1, "Unstable": 1, "Not evaluated": 1})
             folder = result.output_directory / "xi_maps/by_stability/stable"
@@ -135,13 +173,13 @@ class MonteCarloStabilityPolicyTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual([r["case_id"] for r in rows], ["run_000001"])
             self.assertEqual(rows[0]["modal_damping_status"], "Damped under")
-            self.assertEqual(rows[0]["angular_status"], "")
+            self.assertEqual(rows[0]["angular_status"], "Stable")
             loaded = load_saved_analysis(result.output_directory)
-            self.assertFalse(loaded.include_angle)
+            self.assertTrue(loaded.include_angle)
             self.assertEqual(loaded.voltage_scope, workbench._spatial_voltage_scope)
             self.assertEqual([c.assessment for c in loaded.cases], list(expected))
-            # A saved legacy policy is never silently substituted for Monte Carlo.
-            metadata["include_angle"] = True
+            # A saved result cannot silently drop its angular classification.
+            metadata["include_angle"] = False
             (result.output_directory / "spatial_metadata.json").write_text(json.dumps(metadata))
             with self.assertRaisesRegex(ValueError, "angular criterion"):
                 load_saved_analysis(result.output_directory)

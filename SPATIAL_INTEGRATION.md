@@ -31,7 +31,7 @@ python -m montecarlo.spatial_stability --mode study --study "C:/ruta/estudio" --
 result = workbench.create_spatial_stability()
 ```
 
-Existe en `SingleRunWorkbench` y `MonteCarloWorkbench`. Forma parte del flujo principal de ambos workbenches, sin detener los analisis electricos si sus metadatos no son evaluables. El primero solicita Assets si falta. En `single_run_playground.py` se elige el Excel al inicio y se reutilizan los calculos ya realizados:
+Existe en `SingleRunWorkbench` y `MonteCarloWorkbench`. Forma parte del flujo principal de Monte Carlo, sin detener los analisis electricos si sus metadatos no son evaluables. En el flujo de caso unico queda disponible como operacion manual, pero no se ejecuta automaticamente. El primero solicita Assets si falta. En `single_run_playground.py` se elige el Excel al inicio y se reutilizan los calculos ya realizados:
 
 ```python
 spatial_result = workbench.create_spatial_stability(
@@ -41,7 +41,7 @@ spatial_result = workbench.create_spatial_stability(
 )
 ```
 
-Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas a `06_Spatial_Stability/`; en `playground.py`, los mapas van a `04_spatial_stability/`. Las llamadas directas al workbench conservan la ruta `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
+Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_run_playground.py`, todos los resultados van a la carpeta elegida y los mapas manuales van a `06_Spatial_Stability/`; en `playground.py`, los mapas van a `05_Spatial_Stability/`. Las llamadas directas al workbench conservan la ruta `analysis_outputs` si no se selecciona otra mediante `select_output_directory()`.
 
 ## Datos y criterio
 
@@ -49,12 +49,16 @@ Los playgrounds solicitan una carpeta de salida antes de analizar. En `single_ru
 - Hoja `Unit Manager`: emtp_name, App. Power [MVA], Inertia [s] (requisito de Assets existente), posX y posY. La inercia de las maquinas sincronas se utiliza en el calculo angular.
 - La equivalencia confirmada PFV_POZOALMONTE_HUAYCA -> PFV_LA_HUAYCA_II se aplica para buscar coordenadas y potencia; nombres exactos tienen prioridad. No hay coincidencias difusas. Los nombres normalizados ambiguos se rechazan.
 - xi = Kp/(2*sqrt(Ki)); fn [Hz] = sqrt(Ki)/(2*pi), igual que data.run.read_active_controller_parameters.
-- Monte Carlo usa stability.dynamic_stability.assess_monte_carlo_stability: Unstable si la tension es Unstable O el amortiguamiento es Growing. Damped under (positivo y menor al 5 %) queda en el grupo Stable cuando la tension es estable, conservando el detalle en modal_damping_status. Si no hay fallo conocido y falta evidencia, queda Not evaluated.
-- En playground.py se reutilizan las mismas evaluaciones del informe para las barras seleccionadas; no se relee Parquet para reclasificar ni se evalua el angulo. La llamada espacial de estudio sin analisis previo evalua tension/amortiguamiento para todas las barras disponibles y registra ese alcance.
+- Monte Carlo usa stability.dynamic_stability.assess_monte_carlo_stability: Unstable si la tension es Unstable, el amortiguamiento es Growing o la estabilidad angular es Unstable. Damped under (positivo y menor al 5 %) queda en el grupo Stable cuando los demas criterios son estables, conservando el detalle en modal_damping_status. Si no hay fallo conocido y falta evidencia, queda Not evaluated.
+- En playground.py se reutilizan las mismas evaluaciones del informe para las barras seleccionadas, amortiguamiento y angulo. La llamada espacial de estudio sin analisis previo evalua los tres criterios para todas las barras disponibles y registra ese alcance.
 - SingleRunWorkbench conserva su evaluacion independiente de tension, amortiguamiento y angulo mediante assess_dynamic_stability.
-- spatial_metadata.json registra include_angle y voltage_scope. Los lectores conservan el criterio del archivo guardado: no reinterpretan silenciosamente resultados antiguos con angulo.
+- spatial_metadata.json registra include_angle, monte_carlo_policy y voltage_scope. Los lectores conservan el criterio del archivo guardado: no reinterpretan silenciosamente resultados antiguos.
 
 ## Resultados
+
+El flujo Monte Carlo organiza sus resultados en `01_Controllers`, `02_<BUS>`,
+`03_Transfer_Stability`, `04_Angular_Stability` y `05_Spatial_Stability`.
+Las carpetas antiguas no se eliminan automaticamente.
 
 ```
 xi_maps/by_case/xi_map_run_000001.png
@@ -79,20 +83,20 @@ Incluye pruebas de conversion Hz/xi, equivalencias de nombres, unidades repetida
 
 ## Playground para multiples simulaciones
 
-`python playground.py` ejecuta los analisis habituales, incluido espacial como etapa no bloqueante. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; el archivo `analysis.log` y el resumen final informan su estado. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/04_spatial_stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
+`python playground.py` ejecuta los analisis habituales, incluido espacial como etapa no bloqueante. Guarda los archivos sin abrir ventanas de Matplotlib. Las figuras se cierran despues de guardarse para liberar memoria. El analisis espacial no imprime progreso por corrida; el archivo `analysis.log` y el resumen final informan su estado. Los mapas espaciales se guardan en `<carpeta_salida_elegida>/05_Spatial_Stability/`, con `xi_maps` y `fn_maps` por corrida y por clase de estabilidad dinamica. `max_runs` en playground.py permite limitar el estudio a los primeros runs ordenados; None analiza todos. Conserva las rutas y la seleccion de barras configuradas en playground.py; si context_path, assets_path u output_path es None, usa los selectores correspondientes. Cancelar la seleccion de salida detiene la ejecucion antes del analisis.
 
 ## Auditoria de promedios por estabilidad
 
-La estructura Monte Carlo es `04_spatial_stability/{xi_maps|fn_maps}/by_stability/{stable|unstable}/`, sin nivel dynamic intermedio. Si hay casos no evaluados, se conservan separados en not_evaluated; no se mezclan con estables. `cases.csv` enumera las corridas incluidas y los resultados de criterio y el detalle Damped under; angular_status queda vacio en Monte Carlo. `device_class_comparison.csv` presenta los dos promedios por unidad y sus diferencias. `spatial_metadata.json` registra la pertenencia exacta de cada grupo.
+La estructura Monte Carlo es `05_Spatial_Stability/{xi_maps|fn_maps}/by_stability/{stable|unstable}/`, sin nivel dynamic intermedio. Si hay casos no evaluados, se conservan separados en not_evaluated; no se mezclan con estables. `cases.csv` enumera las corridas incluidas y los resultados de criterio, incluido angular_status y el detalle Damped under. `device_class_comparison.csv` presenta los dos promedios por unidad y sus diferencias. `spatial_metadata.json` registra la pertenencia exacta de cada grupo.
 
 Los mapas xi agrupados usan una escala comun calculada con los promedios de los grupos; los mapas individuales conservan su escala comun por corrida. Los mapas fn mantienen las bandas fijas elegidas: valores numericos diferentes dentro de la misma banda tienen el mismo color. No se altera la clasificacion dinamica ni se cambia de banda para forzar diferencias visuales.
 
 ## Distribuciones por estabilidad
 
-Se generan automaticamente en `04_spatial_stability/distributions_by_stability/`, usando las mismas etiquetas del flujo que genero los mapas (Monte Carlo: tension + Growing, sin angulo; Single Run: incluye angulo). Para generar solo estas figuras desde resultados guardados, sin releer Parquet ni regenerar mapas:
+Se generan automaticamente en `05_Spatial_Stability/distributions_by_stability/`, usando las mismas etiquetas del flujo que genero los mapas (Monte Carlo: tension + amortiguamiento modal + angulo; Single Run: criterio estricto propio). Para generar solo estas figuras desde resultados guardados, sin releer Parquet ni regenerar mapas:
 
 ```powershell
-python -m montecarlo.spatial_stability.distributions --results "C:/ruta/04_spatial_stability"
+python -m montecarlo.spatial_stability.distributions --results "C:/ruta/05_Spatial_Stability"
 ```
 
 - `01_case_parameter_distributions.png`: ECDF y cajas con puntos de los promedios por MVA de xi y fn de cada caso. Cada punto representa una corrida.
@@ -106,13 +110,13 @@ Los CSV registran indicadores por caso, por tecnologia, cuantiles y curvas pobla
 ## Clustering de corridas con diez indicadores
 
 Se ejecuta automaticamente al crear los resultados espaciales con playground.py.
-La salida queda en 04_spatial_stability/clustering/. No abre ventanas ni imprime
+La salida queda en 05_Spatial_Stability/clustering/. No abre ventanas ni imprime
 progreso por corrida. Tambien se puede ejecutar solo el clustering, reutilizando
 los CSV espaciales existentes y sin releer Parquet:
 
 ```powershell
 python clustering_playground.py
-python -m montecarlo.spatial_stability.clustering --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+python -m montecarlo.spatial_stability.clustering --results "C:/ruta/05_Spatial_Stability" --output "C:/ruta/05_Spatial_Stability"
 ```
 
 Sin rutas, solicita la carpeta de resultados espaciales y la carpeta de salida;
@@ -123,7 +127,7 @@ weighted_xi_PMGD, weighted_fn_hz_BESS, weighted_fn_hz_PE, weighted_fn_hz_PFV,
 weighted_fn_hz_PMGD, xi_spread y fn_hz_spread. Los ocho promedios usan MVA
 dentro de cada tecnologia; las dos dispersiones son desviaciones estandar MVA
 sobre todos los dispositivos incluidos. Cada corrida pesa igual. Las clases
-dinamicas del flujo activo solo se comparan despues del ajuste; en Monte Carlo no se evalua el angulo.
+dinamicas del flujo activo solo se comparan despues del ajuste; en Monte Carlo incluye el resultado angular nativo.
 
 Requiere las cuatro tecnologias en cada caso; los casos incompletos se documentan
 en excluded_cases.csv, sin rellenar con ceros. Con menos de cuatro casos completos,
@@ -241,7 +245,7 @@ XI_GROUPS_DESCRIPTION.md detalla el metodo y resume los perfiles.
 Para generar solo el grafico nuevo sin tocar los anteriores:
 
 ```powershell
-python -m montecarlo.spatial_stability.xi_groups --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+python -m montecarlo.spatial_stability.xi_groups --results "C:/ruta/05_Spatial_Stability" --output "C:/ruta/05_Spatial_Stability"
 ```
 
 Sin rutas se solicitan carpetas de entrada y salida mediante selectores.
@@ -251,9 +255,9 @@ Sin rutas se solicitan carpetas de entrada y salida mediante selectores.
 
 playground.py ejecuta tambien el analisis supervisado adicional sobre los resultados
 espaciales y guarda una carpeta independiente:
-04_spatial_stability/stability_characterization/.
+05_Spatial_Stability/stability_characterization/.
 Los mapas y el grafico 05 de clustering mantienen su formato y sus indicadores.
-La clasificacion del flujo activo nunca se reemplaza por predicciones: Monte Carlo usa tension o Growing; Damped under pertenece al grupo Stable si la tension es estable.
+La clasificacion del flujo activo nunca se reemplaza por predicciones: Monte Carlo usa tension, amortiguamiento modal y angulo; Damped under pertenece al grupo Stable si tension y angulo son estables.
 
 Se comparan logistica regularizada, logistica con interacciones, arbol pequeno,
 bosque aleatorio, boosting, SVM radial y Naive Bayes. Cada familia prueba:
@@ -280,7 +284,7 @@ Para ejecutar solo este analisis, sin releer Parquet ni regenerar mapas:
 
 ```powershell
 python characterization_playground.py
-python -m montecarlo.spatial_stability.characterization --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+python -m montecarlo.spatial_stability.characterization --results "C:/ruta/05_Spatial_Stability" --output "C:/ruta/05_Spatial_Stability"
 ```
 
 Sin rutas abre selectores de entrada/salida. --repeats configura repeticiones;
@@ -310,7 +314,7 @@ explica la lectura. Para actualizar solo estos arboles usando resultados guardad
 sin repetir la comparacion de modelos ni modificar los mapas:
 
 ```powershell
-python characterization_playground.py --trees-only --results "C:/ruta/04_spatial_stability" --output "C:/ruta/04_spatial_stability"
+python characterization_playground.py --trees-only --results "C:/ruta/05_Spatial_Stability" --output "C:/ruta/05_Spatial_Stability"
 ```
 
 
@@ -327,7 +331,7 @@ El cargador admite los registros spatial_status=Skipped del exportador nuevo
 y conserva su razon. Los conteos minimos de mapas de indicadores fisicos
 solo incluyen corridas con datos de controladores.
 
-Monte Carlo conserva 04_spatial_stability/; el flujo individual usa
+Monte Carlo conserva 05_Spatial_Stability/; el flujo individual usa
 06_Spatial_Stability/ como en la estructura actual del repositorio.
 
 
@@ -352,10 +356,10 @@ xi y fn medios ponderados por MVA. Cada punto es una corrida; se conserva la
 figura 01 completa. La figura nueva tiene un archivo de metadatos independiente
 con criterio, alcance de barras y recuentos por clase.
 
-Ambos resultados usan las etiquetas del flujo activo. En Monte Carlo no
-participa el angulo: tension Unstable o amortiguamiento Growing es Unstable;
-Damped under pertenece al grupo Stable si la tension es estable. No evaluados
-quedan separados y no se convierten en estables.
+Ambos resultados usan las etiquetas del flujo activo. En Monte Carlo, tension
+Unstable, amortiguamiento Growing o angulo Unstable hacen el caso Unstable;
+Damped under pertenece al grupo Stable si tension y angulo son estables. No
+evaluados quedan separados y no se convierten en estables.
 
 
 Los casos Not evaluated se conservan en los CSV y metadatos de auditoria, pero se excluyen de puntos, cajas, curvas, barras, mapas y leyendas. Las proyecciones conservan sus ajustes no supervisados; solo se ocultan las observaciones sin etiqueta evaluada. No se convierten a Stable.

@@ -523,7 +523,7 @@ def main():
     from utils.output_directory import select_output_directory
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path,
-                        help="Existing 04_spatial_stability directory; omitted opens picker")
+                        help="Existing 05_Spatial_Stability directory; omitted opens picker")
     parser.add_argument("--output", type=Path,
                         help="Directory to contain clustering/; omitted opens output picker")
     parser.add_argument("--max-clusters", type=int, default=6)
@@ -540,7 +540,7 @@ def main():
         window.withdraw()
         window.attributes("-topmost", True)
         try:
-            selected = filedialog.askdirectory(title="Select existing 04_spatial_stability results")
+            selected = filedialog.askdirectory(title="Select existing 05_Spatial_Stability results")
         finally:
             window.destroy()
         if not selected:

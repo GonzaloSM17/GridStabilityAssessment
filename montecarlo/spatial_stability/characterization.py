@@ -505,7 +505,7 @@ def _description(result, metadata):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", type=Path, help="Existing 04_spatial_stability; omitted opens picker")
+    parser.add_argument("--results", type=Path, help="Existing 05_Spatial_Stability; omitted opens picker")
     parser.add_argument("--output", type=Path, help="Parent of stability_characterization/; omitted opens picker")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--trees-only", action="store_true",
@@ -518,7 +518,7 @@ def main():
         window.withdraw()
         window.attributes("-topmost", True)
         try:
-            selected = filedialog.askdirectory(title="Select existing 04_spatial_stability results")
+            selected = filedialog.askdirectory(title="Select existing 05_Spatial_Stability results")
         finally:
             window.destroy()
         if not selected:

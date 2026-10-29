@@ -159,6 +159,7 @@ def export_case_weighted_means(analysis, output_directory):
     finally:
         plt.close(figure)
     metadata = dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,
+                    monte_carlo_policy=analysis.monte_carlo_policy,
                     voltage_scope=analysis.voltage_scope,
                     features=["weighted_xi","weighted_fn_hz"],
                     counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
@@ -239,7 +240,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
     fig.suptitle("Distribuciones por tecnologia y estabilidad dinamica\nCada punto es el promedio ponderado de esa tecnologia en una corrida",fontsize=13)
     save(fig,"04_technology_case_distributions.png")
     paths.append(export_case_weighted_means(analysis, output_directory))
-    metadata=dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
+    metadata=dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,monte_carlo_policy=analysis.monte_carlo_policy,counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
                   plotted_statuses=list(PLOT_STATUSES),hidden_not_evaluated=sum(r["status"]=="Not evaluated" for r in rows),
                   cases=len(rows),devices=len({p.device_id for p in analysis.points}),
                   case_weighting="One observation per run; equal run weight, including within each technology",
@@ -269,13 +270,29 @@ def load_saved_analysis(results):
     include_angle = metadata.get("include_angle", any(row.get("angular_status") for row in saved_cases))
     if not isinstance(include_angle, bool):
         raise ValueError("Saved include_angle must be boolean")
+    monte_carlo_policy = metadata.get("monte_carlo_policy", not include_angle)
+    if not isinstance(monte_carlo_policy, bool):
+        raise ValueError("Saved monte_carlo_policy must be boolean")
     cases=[];skipped=[]
     mapped_ids={point.case_id for point in points}
     for row in saved_cases:
         if include_angle:
             if row.get("angular_status") not in {"Stable","Unstable","Not evaluated"}:
                 raise ValueError("Saved labels must include the angular criterion")
-            assessment=assess_dynamic_stability(int(row["run_id"]),row["voltage_status"],row["modal_damping_status"],row["angular_status"])
+            if monte_carlo_policy:
+                assessment = assess_monte_carlo_stability(
+                    int(row["run_id"]),
+                    row["voltage_status"],
+                    row["modal_damping_status"],
+                    row["angular_status"],
+                )
+            else:
+                assessment = assess_dynamic_stability(
+                    int(row["run_id"]),
+                    row["voltage_status"],
+                    row["modal_damping_status"],
+                    row["angular_status"],
+                )
         else:
             if row.get("angular_status"):
                 raise ValueError("Monte Carlo labels must not use the angular criterion")
@@ -288,7 +305,8 @@ def load_saved_analysis(results):
             skipped.append(SpatialSkippedRun(row["case_id"],row.get("spatial_reason") or
                                              row.get("diagnostics") or "No mapped controllers"))
     analysis=SpatialStabilityAnalysis(tuple(points),tuple(cases),skipped_runs=tuple(skipped),
-                                     voltage_scope=metadata.get("voltage_scope", "All available 220/500 kV buses"))
+                                     voltage_scope=metadata.get("voltage_scope", "All available 220/500 kV buses"),
+                                     monte_carlo_policy=monte_carlo_policy)
     _validate(analysis)
     return analysis
 
@@ -297,7 +315,7 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results",type=Path,required=True,help="Existing 04_spatial_stability output directory")
+    parser.add_argument("--results",type=Path,required=True,help="Existing 05_Spatial_Stability output directory")
     parser.add_argument("--low-xi-threshold",type=float,default=.7)
     parser.add_argument("--high-fn-threshold-hz",type=float,default=10.)
     args=parser.parse_args()

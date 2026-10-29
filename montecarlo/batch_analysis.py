@@ -25,6 +25,7 @@ from stability.scenario import (
     EvaluationProfile,
 )
 from montecarlo.study import MonteCarloStudy
+from montecarlo.angular_stability import AngularStudyAnalysis
 from stability.dynamic_stability import (
     DynamicStabilityAssessment,
     assess_monte_carlo_stability,
@@ -523,17 +524,24 @@ class AnalysisPipeline:
     def analyze_contingency_dynamic_stability(
         study_analysis: StudyAnalysis,
         transfer_analysis: TransferStudyAnalysis,
+        angular_analysis: AngularStudyAnalysis | None = None,
     ) -> ContingencyDynamicStabilityAnalysis:
-        """Combine voltage stability with active-power transfer modal damping."""
+        """Combine voltage, active-power damping, and angular stability."""
         assessments = []
         for run_id in study_analysis.run_ids:
             voltage_status = study_analysis.status_for_run(run_id)
             modal_damping_status = transfer_analysis.modal_damping_status_for_run(run_id)
+            angular_status = (
+                angular_analysis.status_for_run(run_id)
+                if angular_analysis is not None
+                else None
+            )
             assessments.append(
                 assess_monte_carlo_stability(
                     run_id,
                     voltage_status,
                     modal_damping_status,
+                    angular_status,
                 )
             )
         return ContingencyDynamicStabilityAnalysis(tuple(assessments))
@@ -1440,15 +1448,20 @@ class AnalysisPipeline:
         self,
         analysis: ControllerStudyAnalysis,
         study_analysis: StudyAnalysis | None = None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ):
-        """Plot all machine controllers using the selected-study run status."""
+        """Plot all machine controllers using the global run stability status."""
         figure, axis = self._create_controller_figure(
             self._controller_figure_title(
                 "Controller population across all active machines",
                 study_analysis,
+                dynamic_stability_analysis,
             )
         )
-        stable_run_ids = self._stable_run_ids(study_analysis)
+        stable_run_ids = self._stable_run_ids(
+            study_analysis,
+            dynamic_stability_analysis,
+        )
         stable_points = [
             point for point in analysis.controller_points if point.run_id in stable_run_ids
         ]
@@ -1495,15 +1508,20 @@ class AnalysisPipeline:
         self,
         analysis: ControllerStudyAnalysis,
         study_analysis: StudyAnalysis | None = None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ):
-        """Plot weighted controllers using the selected-study run status."""
+        """Plot weighted controllers using the global run stability status."""
         figure, axis = self._create_controller_figure(
             self._controller_figure_title(
                 "Nominal-power-weighted controller point by run",
                 study_analysis,
+                dynamic_stability_analysis,
             )
         )
-        stable_run_ids = self._stable_run_ids(study_analysis)
+        stable_run_ids = self._stable_run_ids(
+            study_analysis,
+            dynamic_stability_analysis,
+        )
         stable_points = [
             point for point in analysis.weighted_run_points if point.run_id in stable_run_ids
         ]
@@ -1831,8 +1849,15 @@ class AnalysisPipeline:
     @staticmethod
     def _stable_run_ids(
         study_analysis: StudyAnalysis | None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ) -> set[int]:
         """Return consolidated stable run identifiers, when available."""
+        if dynamic_stability_analysis is not None:
+            return {
+                assessment.run_id
+                for assessment in dynamic_stability_analysis.run_assessments
+                if assessment.status == "Stable"
+            }
         if study_analysis is None:
             return set()
         return set(study_analysis.stable_run_ids)
@@ -1841,8 +1866,11 @@ class AnalysisPipeline:
     def _controller_figure_title(
         title: str,
         study_analysis: StudyAnalysis | None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ) -> str:
         """Identify the selected-study status used to color controller points."""
+        if dynamic_stability_analysis is not None:
+            return f"{title}: global dynamic-stability status"
         if study_analysis is None:
             return title
         return f"{title}: consolidated selected-analysis status"

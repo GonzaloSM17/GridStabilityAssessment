@@ -58,7 +58,7 @@ class SingleRunAnalysisResult:
     high_frequency: HighFrequencyResult
     angular: AngularStabilityResult
     plant_recovery: PlantRecoveryResult
-    spatial: object
+    spatial: object | None
     report_path: Path
 
     @property
@@ -72,7 +72,6 @@ class SingleRunAnalysisResult:
             self.high_frequency,
             self.angular,
             self.plant_recovery,
-            self.spatial,
         )
 
 
@@ -251,12 +250,11 @@ class SingleRunWorkbench:
         logger.info("Starting plant recovery")
         plant_recovery = self.create_plant_recovery()
         logger.info("Plant recovery completed")
-        logger.info("Starting spatial stability")
-        spatial = self.create_spatial_stability(
-            voltage=voltage.analysis,
-            damping=damping.analysis,
-            angular=angular.analysis,
-        )
+        # Spatial aggregation is a Monte Carlo workflow. Keep the public
+        # create_spatial_stability() method for deliberate manual use, but do
+        # not execute it from the official focused single-run sequence.
+        spatial = None
+        logger.info("Spatial stability is disabled for the single-run workflow")
         report_path = self.create_report(
             initialization.analysis,
             voltage.analysis,
@@ -288,7 +286,7 @@ class SingleRunWorkbench:
         high_frequency: HighFrequencyAnalysis,
         angular: AngularStabilityAnalysis,
         plant_recovery: PlantRecoveryAnalysis,
-        spatial_stability,
+        spatial_stability=None,
     ) -> Path:
         """Write the database-style case report at the analysis-output root."""
         return SingleRunReport(

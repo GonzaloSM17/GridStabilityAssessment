@@ -8,6 +8,8 @@ from montecarlo.batch_analysis import (
     SignalStudyAnalysis,
     StudyAnalysis,
 )
+from montecarlo.angular_stability import AngularStudyAnalysis
+from stability.angular import ANGULAR_LIMIT_DEGREES, ANGULAR_REFERENCE_NOTE
 from stability.scenario import ContingencyScenario, EvaluationProfile
 from stability.power_transfer import HighFrequencyStudyAnalysis, TransferStudyAnalysis
 
@@ -31,6 +33,7 @@ class AnalysisReport:
     transfer_analysis: TransferStudyAnalysis | None = None
     high_frequency_analysis: HighFrequencyStudyAnalysis | None = None
     dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None
+    angular_stability_analysis: AngularStudyAnalysis | None = None
     scenario: ContingencyScenario | None = None
     profile: EvaluationProfile | None = None
     spatial_stability: object | None = None
@@ -54,6 +57,8 @@ class AnalysisReport:
             damping_pairs_sheet = workbook.create_sheet("Transfer Damping Pairs")
         if self.high_frequency_analysis is not None:
             high_frequency_sheet = workbook.create_sheet("High-Frequency Components")
+        if self.angular_stability_analysis is not None:
+            angular_sheet = workbook.create_sheet("Angular Stability")
         if self.spatial_stability is not None:
             spatial_sheet = workbook.create_sheet("Spatial Stability")
 
@@ -69,6 +74,8 @@ class AnalysisReport:
             self._write_transfer_damping_pairs(damping_pairs_sheet)
         if self.high_frequency_analysis is not None:
             self._write_high_frequency_components(high_frequency_sheet)
+        if self.angular_stability_analysis is not None:
+            self._write_angular_stability(angular_sheet)
         if self.spatial_stability is not None:
             self._write_spatial_stability(spatial_sheet)
         workbook.save(output_path)
@@ -104,6 +111,10 @@ class AnalysisReport:
             "Lowest EM Mode Damping [%]",
             "Lowest EM Mode Transfer",
             "High-Frequency Components",
+            "Angular Stability",
+            "Critical Angular Machine",
+            "Max Angular Excursion [deg]",
+            "First Angular Violation [s]",
             "Spatial Map",
             "Spatial Map Note",
         ))
@@ -115,6 +126,12 @@ class AnalysisReport:
                 else None
             )
             high_frequency_count = self._high_frequency_component_count(run_id)
+            angular = (
+                self.angular_stability_analysis.assessment_for(run_id)
+                if self.angular_stability_analysis is not None
+                else None
+            )
+            critical_machine = angular.critical_machine if angular is not None else None
             spatial_status, spatial_note = self._spatial_status_for_run(run_id)
             sheet.append((
                 self._run_name(run_id),
@@ -127,6 +144,18 @@ class AnalysisReport:
                 damping.lowest_damping_percent,
                 damping.lowest_transfer_name,
                 f"Detected ({high_frequency_count})" if high_frequency_count else "None detected",
+                angular.status if angular is not None else "Not evaluated",
+                critical_machine.machine_name if critical_machine is not None else None,
+                (
+                    critical_machine.maximum_absolute_excursion_degrees
+                    if critical_machine is not None
+                    else None
+                ),
+                (
+                    critical_machine.first_limit_violation_time_s
+                    if critical_machine is not None
+                    else None
+                ),
                 spatial_status,
                 spatial_note,
             ))
@@ -196,6 +225,41 @@ class AnalysisReport:
                     assessment.note,
                 ))
         self._format_transfer_sheet(sheet)
+
+    def _write_angular_stability(self, sheet) -> None:
+        """Write one traceable row per run and synchronous machine."""
+        sheet.append((
+            "Run", "Angular Stability", "Machine", "Minimum Excursion [deg]",
+            "Maximum Excursion [deg]", "Maximum Absolute Excursion [deg]",
+            "First Limit Violation [s]", "Reason",
+        ))
+        for run_assessment in self.angular_stability_analysis.run_assessments:
+            if run_assessment.calculation is None:
+                sheet.append((
+                    self._run_name(run_assessment.run_id),
+                    run_assessment.status,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    run_assessment.reason,
+                ))
+                continue
+            for machine in run_assessment.calculation.analysis.machines:
+                sheet.append((
+                    self._run_name(run_assessment.run_id),
+                    run_assessment.status,
+                    machine.machine_name,
+                    machine.minimum_excursion_degrees,
+                    machine.maximum_excursion_degrees,
+                    machine.maximum_absolute_excursion_degrees,
+                    machine.first_limit_violation_time_s,
+                    None,
+                ))
+        sheet.append(())
+        sheet.append(("Criterion", f"Strictly within ±{ANGULAR_LIMIT_DEGREES:.0f} deg", ANGULAR_REFERENCE_NOTE))
+        self._format_sheet(sheet)
 
     def _write_transfer_modes(self, sheet) -> None:
         """Write one database-style row per electromechanical mode."""
@@ -570,22 +634,27 @@ class AnalysisReport:
                 (
                     "Contingency Dynamic Stability",
                     "Scope",
-                    "Combined voltage stability and active-power transfer modal damping for the defined contingency.",
+                    "Combined voltage stability, active-power transfer modal damping, and COI-referenced angular stability for the defined contingency.",
                 ),
                 (
                     "Contingency Dynamic Stability",
                     "Stable",
-                    "Voltage stability is Stable and modal damping is Damped or Damped under. Low positive damping is retained as Damped under within the Stable group; angular stability is not evaluated.",
+                    "Voltage stability and angular stability are Stable, and modal damping is Damped or Damped under. Low positive damping remains Damped under within the Stable group.",
                 ),
                 (
                     "Contingency Dynamic Stability",
                     "Unstable",
-                    "Either voltage stability is Unstable or active-power transfer modal damping is Growing. Damped under alone does not make the run Unstable.",
+                    "Voltage stability is Unstable, active-power transfer modal damping is Growing, or a machine reaches the angular-separation limit. Damped under alone does not make the run Unstable.",
                 ),
                 (
                     "Contingency Dynamic Stability",
                     "Not evaluated",
-                    "No known voltage failure or Growing oscillation, and voltage or modal damping could not be evaluated.",
+                    "No known failure, but voltage, modal damping, or angular stability could not be evaluated.",
+                ),
+                (
+                    "Angular Stability",
+                    "Reference and limit",
+                    f"{ANGULAR_REFERENCE_NOTE} A machine is Unstable at |excursion| >= {ANGULAR_LIMIT_DEGREES:.0f} deg.",
                 ),
             )
         )

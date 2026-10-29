@@ -62,25 +62,32 @@ def assess_monte_carlo_stability(
     run_id: int,
     voltage_status: str,
     modal_damping_status: str,
+    angular_status: str | None = None,
 ) -> DynamicStabilityAssessment:
-    """Monte Carlo: voltage failure OR Growing; low positive damping is retained.
+    """Apply the Monte Carlo voltage, damping, and optional angular criteria.
 
-    The binary Stable group includes Damped under. Angular stability is not
-    evaluated. A known failure is decisive even when the other result is missing.
+    The binary Stable group includes ``Damped under``. A known voltage, Growing,
+    or angular failure is decisive even when another component is unavailable.
+    ``angular_status=None`` preserves the historical no-angular assessment for
+    compatibility with previously generated Monte Carlo outputs.
     """
     if voltage_status == "Unstable":
         status, reason = "Unstable", "Voltage stability criteria failed."
     elif modal_damping_status == "Growing":
         status, reason = "Unstable", "Active-power transfer oscillations are Growing."
+    elif angular_status == "Unstable":
+        status, reason = "Unstable", "Angular stability criterion failed."
     elif voltage_status != "Stable":
         status, reason = "Not evaluated", "Voltage stability was not evaluated."
     elif modal_damping_status not in {"Damped", "Damped under"}:
         status, reason = "Not evaluated", "Active-power transfer modal damping was not evaluated."
+    elif angular_status == "Not evaluated":
+        status, reason = "Not evaluated", "Angular stability was not evaluated."
     else:
         status = "Stable"
         reason = ("Positive damping below 5% (Damped under); included in the Stable group."
                   if modal_damping_status == "Damped under" else None)
     return DynamicStabilityAssessment(
         run_id, status, voltage_status, modal_damping_status,
-        angular_status=None, reason=reason,
+        angular_status=angular_status, reason=reason,
     )
