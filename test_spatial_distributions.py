@@ -77,7 +77,7 @@ class SpatialDistributionTests(unittest.TestCase):
         before=plt.get_fignums()
         with TemporaryDirectory() as directory:
             paths=export_distributions(a,Path(directory))
-            self.assertEqual(len(paths),4)
+            self.assertEqual(len(paths),5)
             self.assertTrue(all(p.is_file() and p.suffix=='.png' for p in paths))
             metadata=json.loads((Path(directory)/'distributions_by_stability/distribution_metadata.json').read_text())
             self.assertEqual(metadata['counts'],{'Stable':1,'Unstable':0,'Not evaluated':0})

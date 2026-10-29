@@ -575,17 +575,17 @@ class AnalysisReport:
                 (
                     "Contingency Dynamic Stability",
                     "Stable",
-                    "Voltage stability is Stable and active-power transfer modal damping is Damped.",
+                    "Voltage stability is Stable and modal damping is Damped or Damped under. Low positive damping is retained as Damped under within the Stable group; angular stability is not evaluated.",
                 ),
                 (
                     "Contingency Dynamic Stability",
                     "Unstable",
-                    "Either voltage stability is Unstable or active-power transfer modal damping is Growing or Damped under.",
+                    "Either voltage stability is Unstable or active-power transfer modal damping is Growing. Damped under alone does not make the run Unstable.",
                 ),
                 (
                     "Contingency Dynamic Stability",
                     "Not evaluated",
-                    "Either voltage stability or active-power transfer modal damping was not evaluated.",
+                    "No known voltage failure or Growing oscillation, and voltage or modal damping could not be evaluated.",
                 ),
             )
         )

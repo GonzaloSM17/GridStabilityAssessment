@@ -33,6 +33,18 @@ class SpatialStabilityAnalysis:
     cases: tuple[SpatialCaseAssessment, ...]
     excluded_devices: tuple[dict, ...] = ()
     skipped_runs: tuple["SpatialSkippedRun", ...] = ()
+    voltage_scope: str = "All available 220/500 kV buses"
+
+    @property
+    def include_angle(self):
+        return any(case.assessment.angular_status is not None for case in self.cases)
+
+    @property
+    def criterion_description(self):
+        if self.include_angle:
+            return "Native dynamic stability: voltage + modal damping + angle"
+        return ("Monte Carlo: Unstable if voltage is Unstable or modal damping is Growing; "
+                "Damped under is grouped with Stable; angular criterion is not evaluated")
 
 
 @dataclass(frozen=True)

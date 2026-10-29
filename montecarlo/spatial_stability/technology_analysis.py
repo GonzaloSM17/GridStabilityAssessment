@@ -123,11 +123,10 @@ def _draw_grid(axis, cells, xe, ye, *, scope, basis, low_xi_threshold, min_cases
     axis.set_facecolor("#eeeeee")
     for cell in cells:
         ix, iy, n = cell["x_bin"], cell["y_bin"], cell["evaluated"]
-        text = "Sin casos" if not cell["not_evaluated"] else f"Sin evaluados\nNE={cell['not_evaluated']}"
+        text = "Sin casos"
+
         if n:
             text = f"{100*cell['instability_fraction']:.0f}%\n{cell['unstable']}/{n}"
-            if cell["not_evaluated"]:
-                text += f"\nNE={cell['not_evaluated']}"
         if cell["low_sample"]:
             axis.add_patch(Rectangle((ix-.5, iy-.5), 1, 1, fill=False,
                                      hatch="//", edgecolor="#555555", linewidth=0))

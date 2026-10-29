@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 
 from .clustering import FEATURES, TECHNOLOGIES, build_case_profiles
-from .distributions import _csv, LABELS, STATUSES
+from .distributions import _csv, LABELS, STATUSES, PLOT_STATUSES
 
 
 def weighted_profiles(analysis, case_ids, basis):
@@ -147,7 +147,7 @@ def export_weighted_pca(analysis, out, result, composition):
             second = scores[:, 1] if scores.shape[1] > 1 else np.zeros(len(scores))
             second_variance = variance[1] if len(variance) > 1 else 0.
             labels = np.array(info["labels"])
-            present = [s for s in STATUSES if np.any(status == s)]
+            present = [s for s in PLOT_STATUSES if np.any(status == s)]
             for c in range(1, info["k"]+1):
                 for state in present:
                     mask = (labels == c) & (status == state)

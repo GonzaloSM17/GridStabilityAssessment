@@ -202,7 +202,7 @@ class SpatialStabilityTests(unittest.TestCase):
         c=components()
         with patch("single_run.voltage_stability.SingleRunVoltageStability.analyze",side_effect=AssertionError("Unexpected reanalysis")):
             result=workbench.create_spatial_stability(output_directory=self.root/"out",**c)
-        self.assertEqual(len(result.figure_paths),10)
+        self.assertEqual(len(result.figure_paths),11)
         self.assertTrue(all(p.is_file() and p.suffix==".png" for p in result.figure_paths))
         self.assertFalse(list(result.output_directory.rglob("*.svg")))
         self.assertTrue((result.output_directory/"fn_maps/by_case/fn_map_run_000001.png").is_file())
@@ -212,7 +212,7 @@ class SpatialStabilityTests(unittest.TestCase):
         self.assertEqual(row["status"],"Stable");self.assertEqual(row["angular_status"],"Stable")
         self.assertEqual(json.loads((result.output_directory/"spatial_metadata.json").read_text())["cases"],1)
 
-    def test_study_selectors_and_maps_use_all_three_native_criteria(self):
+    def test_study_selectors_and_maps_use_monte_carlo_voltage_and_damping(self):
         from montecarlo.workbench import MonteCarloWorkbench
         study_path=self.root/"study"
         study_path.mkdir();(study_path/"manifest.json").write_text("{}")
@@ -221,17 +221,24 @@ class SpatialStabilityTests(unittest.TestCase):
             rows=[dict(GeneratorName="BESS_A",InService=1,Kp=10.*i,Ki=100.*i*i,UnitId=1),
                   dict(GeneratorName="PFV_LA_HUAYCA_II",InService=1,Kp=30.*i,Ki=300.,UnitId=2)]
             write_parameters(folder,rows);write_parquet(folder,angular_unstable=(i==2))
+            if i == 2:
+                data=pl.read_parquet(folder/"signals.parquet")
+                data=data.with_columns(pl.when(pl.col("time") >= 1.12).then(.6)
+                                       .otherwise(pl.col("KIMAL220_MTR/u_rms")).alias("KIMAL220_MTR/u_rms"))
+                data.write_parquet(folder/"signals.parquet")
         with patch.object(MonteCarloWorkbench,"_choose_context_path",return_value=study_path) as context_picker, patch.object(MonteCarloWorkbench,"_choose_assets_path",return_value=self.assets.workbook_path) as assets_picker:
             workbench=MonteCarloWorkbench()
         context_picker.assert_called_once_with();assets_picker.assert_called_once_with()
         result=workbench.create_spatial_stability()
         self.assertEqual(result.output_directory,(study_path/"analysis_outputs/04_spatial_stability").resolve())
-        self.assertEqual(len(result.figure_paths),12)
+        self.assertEqual(len(result.figure_paths),13)
         self.assertEqual([case.assessment.status for case in result.analysis.cases],["Stable","Unstable"])
         metadata=json.loads((result.output_directory/"spatial_metadata.json").read_text())
         self.assertEqual(metadata["counts"],{"Stable":1,"Unstable":1,"Not evaluated":0})
+        self.assertFalse(metadata["include_angle"])
+        self.assertTrue(all(c.assessment.angular_status is None for c in result.analysis.cases))
         self.assertTrue(all(p.is_file() for p in result.figure_paths))
-        self.assertEqual(len(list((result.output_directory/"distributions_by_stability").glob("*.png"))),4)
+        self.assertEqual(len(list((result.output_directory/"distributions_by_stability").glob("*.png"))),5)
         clustering=json.loads((result.output_directory/"clustering/clustering_metadata.json").read_text(encoding="utf-8"))
         self.assertEqual(clustering["status"],"not_fitted")
         self.assertEqual(len(clustering["excluded_cases"]),2)

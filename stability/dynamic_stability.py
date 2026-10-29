@@ -23,9 +23,9 @@ def assess_dynamic_stability(
 ) -> DynamicStabilityAssessment:
     """Apply active voltage/damping criteria and an optional angular criterion.
 
-    Monte Carlo currently omits ``angular_status`` and therefore preserves its
-    existing voltage-plus-damping decision. A focused single-run assessment can
-    provide it to add the strict centre-of-inertia angular result.
+    Focused single-run assessments supply the centre-of-inertia angular result.
+    Monte Carlo uses assess_monte_carlo_stability instead, with its own binary
+    voltage-or-Growing rule and no angular evaluation.
     """
     if voltage_status == "Not evaluated":
         status = "Not evaluated"
@@ -55,4 +55,32 @@ def assess_dynamic_stability(
         modal_damping_status=modal_damping_status,
         angular_status=angular_status,
         reason=reason,
+    )
+
+
+def assess_monte_carlo_stability(
+    run_id: int,
+    voltage_status: str,
+    modal_damping_status: str,
+) -> DynamicStabilityAssessment:
+    """Monte Carlo: voltage failure OR Growing; low positive damping is retained.
+
+    The binary Stable group includes Damped under. Angular stability is not
+    evaluated. A known failure is decisive even when the other result is missing.
+    """
+    if voltage_status == "Unstable":
+        status, reason = "Unstable", "Voltage stability criteria failed."
+    elif modal_damping_status == "Growing":
+        status, reason = "Unstable", "Active-power transfer oscillations are Growing."
+    elif voltage_status != "Stable":
+        status, reason = "Not evaluated", "Voltage stability was not evaluated."
+    elif modal_damping_status not in {"Damped", "Damped under"}:
+        status, reason = "Not evaluated", "Active-power transfer modal damping was not evaluated."
+    else:
+        status = "Stable"
+        reason = ("Positive damping below 5% (Damped under); included in the Stable group."
+                  if modal_damping_status == "Damped under" else None)
+    return DynamicStabilityAssessment(
+        run_id, status, voltage_status, modal_damping_status,
+        angular_status=None, reason=reason,
     )

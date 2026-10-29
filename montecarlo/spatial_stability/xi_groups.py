@@ -10,7 +10,7 @@ from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 
-from .distributions import _csv, _validate, LABELS, STATUSES, load_saved_analysis
+from .distributions import _csv, _validate, LABELS, STATUSES, PLOT_STATUSES, load_saved_analysis
 
 
 def xi_case_features(analysis, case_ids, basis):
@@ -150,7 +150,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         case_ids=list(ids), clustering=groups,
         pca_scope="Same ten-indicator population-weighted PCA coordinates as graph 06",
         group_scope="Two new groups per weighting basis, fitted only on global xi mean and xi standard deviation",
-        outcome_scope="Native voltage + modal damping + angle labels are displayed after grouping",
+        outcome_scope=analysis.criterion_description + "; labels are displayed after grouping",
         weighting="Units: equal controller weight; MVA: nominal-power fractions within each case; equal case weight in k-means",
         group_numbering="G1 has lower centroid mean xi; G2 higher. Spread relations are measured, never forced.",
         pca_models=models, figures=[])
@@ -180,7 +180,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
                                                 (features[basis][:, 0], features[basis][:, 1]))):
                 axis = axes[row, col]
                 for group in (1, 2):
-                    for status in STATUSES:
+                    for status in PLOT_STATUSES:
                         mask = (labels == group) & (statuses == status)
                         if mask.any():
                             axis.scatter(coordinates[0][mask], coordinates[1][mask], s=52,
@@ -190,7 +190,8 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
                 axis.grid(alpha=.2)
             name = "Unidades" if basis == "units" else "MVA"
             axes[0, col].set(
-                title=f"{name}: G1 n={info['groups'][0]['n_cases']}; G2 n={info['groups'][1]['n_cases']}",
+                title=f"{name}: G1 n={int(np.sum((labels == 1) & np.isin(statuses, PLOT_STATUSES)))}; "
+                      f"G2 n={int(np.sum((labels == 2) & np.isin(statuses, PLOT_STATUSES)))}",
                 xlabel=f"PC1 ponderada ({100*variance[0]:.1f} %)",
                 ylabel=f"PC2 ponderada ({100*second_variance:.1f} %)")
             description = " | ".join(
@@ -202,7 +203,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
                    Patch(facecolor=colors[2], label="G2: xi medio mayor")]
         handles += [Line2D([], [], marker=markers[s], linestyle="none", color="#777777",
                             markeredgecolor="#222222", label=LABELS[s])
-                    for s in STATUSES if np.any(statuses == s)]
+                    for s in PLOT_STATUSES if np.any(statuses == s)]
         fig.legend(handles=handles, loc="outside lower center", ncol=len(handles), fontsize=10)
         fig.suptitle("Dos grupos nuevos segun xi medio y dispersion de xi\n"
                      "Arriba: proyeccion PCA ponderada | Abajo: indicadores que forman los grupos\n"
@@ -234,8 +235,8 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         "Los paneles superiores reutilizan exactamente los ejes ponderados del grafico 06 "
         "(diez indicadores). Los paneles inferiores muestran los dos indicadores fisicos usados "
         "para separar los grupos. fn puede afectar la proyeccion superior, pero no sus colores. "
-        "Circulo: estable, X: inestable, rombo: no evaluado si existe. La estabilidad proviene "
-        "del criterio nativo de tension, amortiguamiento y angulo y no entra al ajuste.", "",
+        "Circulo: estable, X: inestable. No evaluados no se dibujan. La estabilidad proviene "
+        "del criterio nativo registrado en xi_groups_metadata.json y no entra al ajuste.", "",
         "| Ponderacion | Grupo | Casos | xi medio | Dispersion media | Estables | Inestables |",
         "|---|---|---:|---:|---:|---:|---:|",
     ]

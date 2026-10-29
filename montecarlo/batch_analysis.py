@@ -27,7 +27,7 @@ from stability.scenario import (
 from montecarlo.study import MonteCarloStudy
 from stability.dynamic_stability import (
     DynamicStabilityAssessment,
-    assess_dynamic_stability,
+    assess_monte_carlo_stability,
 )
 from stability.power_transfer import (
     DampingCriteria,
@@ -530,7 +530,7 @@ class AnalysisPipeline:
             voltage_status = study_analysis.status_for_run(run_id)
             modal_damping_status = transfer_analysis.modal_damping_status_for_run(run_id)
             assessments.append(
-                assess_dynamic_stability(
+                assess_monte_carlo_stability(
                     run_id,
                     voltage_status,
                     modal_damping_status,
