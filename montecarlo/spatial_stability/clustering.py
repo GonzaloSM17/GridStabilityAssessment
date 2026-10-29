@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 
 from .distributions import (
-    COLORS, LABELS, STATUSES, _csv, case_features, technology_features,
+    COLORS, LABELS, STATUSES, PLOT_STATUSES, _csv, case_features, technology_features,
     load_saved_analysis,
 )
 
@@ -183,6 +183,8 @@ def _export_figures(out, profiles, result, cases):
 
     paths = []
     methods = result["methods"]
+    status_values = np.array([cases[c].assessment.status for c in profiles.case_ids])
+    evaluated = np.isin(status_values, PLOT_STATUSES)
     def figure(width, height):
         fig = Figure(figsize=(width, height), layout="constrained")
         FigureCanvasAgg(fig)
@@ -221,7 +223,7 @@ def _export_figures(out, profiles, result, cases):
         labels = np.asarray(info["labels"])
         positions = np.arange(1, info["k"] + 1)
         bottom = np.zeros(info["k"])
-        for status in STATUSES:
+        for status in PLOT_STATUSES:
             counts = [sum(cases[identifier].assessment.status == status
                           for identifier, label in zip(profiles.case_ids, labels) if label == c)
                       for c in positions]
@@ -229,12 +231,10 @@ def _export_figures(out, profiles, result, cases):
                 axis.bar(positions, counts, bottom=bottom, color=COLORS[status],
                          label=LABELS[status] if status != "Not evaluated" else "_nolegend_")
             bottom += counts
-        unknown = sum(cases[identifier].assessment.status == "Not evaluated"
-                      for identifier in profiles.case_ids)
-        title = method + (f"\nGris: {unknown} casos no evaluados" if unknown else "")
+        title = method
         axis.set(xticks=positions, xlabel="Grupo", ylabel="Numero de corridas", title=title)
         axis.legend(fontsize=8)
-    fig.suptitle("Estabilidad dinamica por grupo: tension + amortiguamiento + angulo\n"
+    fig.suptitle("Estabilidad dinamica observada por grupo\n"
                  "Las etiquetas se comparan despues del agrupamiento")
     save(fig, "03_cluster_stability.png")
 
@@ -246,13 +246,12 @@ def _export_figures(out, profiles, result, cases):
     for axis, (method, info) in zip(axes, methods.items()):
         labels = np.asarray(info["labels"])
         for c in range(1, info["k"] + 1):
-            mask = labels == c
+            mask = (labels == c) & evaluated
             axis.scatter(scores[mask, 0], y[mask], s=25, alpha=.75,
                          color=palette((c - 1) % 10), label=f"Grupo {c}")
         axis.set_title(method)
         axis.legend(fontsize=8)
-    status_values = np.array([cases[c].assessment.status for c in profiles.case_ids])
-    for status in STATUSES:
+    for status in PLOT_STATUSES:
         mask = status_values == status
         if mask.any():
             axes[-1].scatter(scores[mask, 0], y[mask], s=25, alpha=.75,
@@ -276,7 +275,7 @@ def _export_figures(out, profiles, result, cases):
     fig = figure(13, 6)
     axes = np.asarray(fig.subplots(1, len(methods), sharex=True, sharey=True,
                                    squeeze=False)).ravel()
-    present = [status for status in STATUSES if np.any(status_values == status)]
+    present = [status for status in PLOT_STATUSES if np.any(status_values == status)]
     for axis, (method, info) in zip(axes, methods.items()):
         labels = np.asarray(info["labels"])
         for c in range(1, info["k"] + 1):

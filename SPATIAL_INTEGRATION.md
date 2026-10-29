@@ -329,3 +329,33 @@ solo incluyen corridas con datos de controladores.
 
 Monte Carlo conserva 04_spatial_stability/; el flujo individual usa
 06_Spatial_Stability/ como en la estructura actual del repositorio.
+
+
+## Arboles globales y figura de promedios MVA
+
+04_descriptive_trees_mva.png y las versiones units/combinada ahora se ajustan
+exclusivamente con cuatro indicadores de la poblacion incluida en cada corrida:
+xi medio, fn media, desviacion estandar de xi y desviacion estandar de fn.
+En MVA se usa w_i = MVA_i / suma(MVA), promedio = suma(w_i * parametro_i)
+y dispersion = sqrt(suma(w_i * (parametro_i - promedio)**2)).
+Cada corrida pesa igual al ajustar el arbol. Los nodos y las tablas de las hojas
+usan estos mismos cuatro indicadores, sin divisiones por tecnologia. Las hojas
+siguen mostrando medianas entre corridas de cada clase, conteos y fallos.
+No se exige que esten presentes BESS/PE/PFV/PMGD; el arbol se genera aunque el
+analisis de modelos por tecnologia no pueda ajustarse. Casos no evaluados y sin
+controladores se excluyen y documentan en tree_excluded_cases.csv.
+tree_case_features.csv conserva los cuatro valores por corrida y ponderacion.
+
+distributions_by_stability/05_case_weighted_means.png conserva solo los dos
+paneles inferiores de 01_case_parameter_distributions.png: cajas con puntos para
+xi y fn medios ponderados por MVA. Cada punto es una corrida; se conserva la
+figura 01 completa. La figura nueva tiene un archivo de metadatos independiente
+con criterio, alcance de barras y recuentos por clase.
+
+Ambos resultados usan las etiquetas del flujo activo. En Monte Carlo no
+participa el angulo: tension Unstable o amortiguamiento Growing es Unstable;
+Damped under pertenece al grupo Stable si la tension es estable. No evaluados
+quedan separados y no se convierten en estables.
+
+
+Los casos Not evaluated se conservan en los CSV y metadatos de auditoria, pero se excluyen de puntos, cajas, curvas, barras, mapas y leyendas. Las proyecciones conservan sus ajustes no supervisados; solo se ocultan las observaciones sin etiqueta evaluada. No se convierten a Stable.

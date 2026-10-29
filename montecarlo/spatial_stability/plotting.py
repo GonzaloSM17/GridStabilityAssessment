@@ -11,6 +11,7 @@ import unicodedata
 from time import monotonic
 
 from .models import SpatialStabilityResult
+from .distributions import PLOT_STATUSES
 
 FN_LABELS = ("0-2 Hz", "2-5 Hz", "5-10 Hz", "10-20 Hz", ">=20 Hz")
 STATUS_DIRECTORIES = {"Stable": "stable", "Unstable": "unstable", "Not evaluated": "not_evaluated"}
@@ -114,20 +115,21 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         if case.assessment.status not in STATUS_DIRECTORIES: raise ValueError("Unknown dynamic-stability status")
     names = [_filename(case.case_id) for case in cases]
     if len(names) != len(set(names)): raise ValueError("Run names collide after filename normalization")
+    scale_points = tuple(p for p in points if case_map[p.case_id].assessment.status in PLOT_STATUSES) or points
     unique = {}
-    for point in points:
+    for point in scale_points:
         if point.device_id in unique and (point.x,point.y) != (unique[point.device_id].x,unique[point.device_id].y):
             raise ValueError(f"Device coordinates change between cases: {point.device_id}")
         unique[point.device_id] = point
     universe = tuple(unique.values())
-    xmin, xmax = min(p.x for p in points), max(p.x for p in points)
-    ymin, ymax = min(p.y for p in points), max(p.y for p in points)
+    xmin, xmax = min(p.x for p in scale_points), max(p.x for p in scale_points)
+    ymin, ymax = min(p.y for p in scale_points), max(p.y for p in scale_points)
     dx, dy = max((xmax-xmin)*.08,1.), max((ymax-ymin)*.08,1.)
     bounds = (xmin-dx,xmax+dx,ymin-dy,ymax+dy)
-    lo, hi = min(p.xi for p in points), max(p.xi for p in points)
+    lo, hi = min(p.xi for p in scale_points), max(p.xi for p in scale_points)
     if lo == hi: hi = lo+1.
-    fn_edges = [0.,2.,5.,10.,20.,max(30.,ceil(max(p.fn_hz for p in points)/10)*10.)]
-    size_factor = 450./max(p.nominal_power_mva for p in points)
+    fn_edges = [0.,2.,5.,10.,20.,max(30.,ceil(max(p.fn_hz for p in scale_points)/10)*10.)]
+    size_factor = 450./max(p.nominal_power_mva for p in scale_points)
     out = Path(output_directory).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
     point_rows = [asdict(p) for p in points]
@@ -151,7 +153,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         ids = {case.case_id for case in mapped_cases if case.assessment.status == status}
         averages, rows = mean_points(points, ids)
         groups[status] = (ids, averages, rows)
-    group_xi = [point.xi for _, averages, _ in groups.values() for point in averages]
+    group_xi = [point.xi for status, (_, averages, _) in groups.items()
+                if status in PLOT_STATUSES for point in averages]
     group_limits = (min(group_xi), max(group_xi)) if group_xi else (lo, hi)
     if group_limits[0] == group_limits[1]: group_limits = (group_limits[0], group_limits[0]+1.)
     stable_rows = {row["device_id"]: row for row in groups["Stable"][2]}
@@ -182,6 +185,9 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     columns = ["device_id","generator_name","asset_name","x","y","mva","n_cases","n_cases_in_class","mean_xi","mean_fn_hz","frequency_band"]
     for metric, folder_name, prefix in (("xi","xi_maps","xi"),("fn_hz","fn_maps","fn")):
         directory = out/folder_name
+        old_unknown_map = directory/"by_stability"/"not_evaluated"/f"{prefix}_mean_map.png"
+        if old_unknown_map.is_file():
+            old_unknown_map.unlink()
         for status, status_folder in STATUS_DIRECTORIES.items():
             selected_cases, averages, rows = groups[status]
             # Always represent Stable/Unstable, and create an unknown class only when it exists.
@@ -196,6 +202,11 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             fleet = [row["weighted_xi" if metric=="xi" else "weighted_fn_hz"] for row in case_rows if row["case_id"] in selected_cases]
             average = mean(fleet) if fleet else None
             summary.append(dict(metric=metric,status=status,n_cases=len(selected_cases),weighted_population_mean=average))
+            if status not in PLOT_STATUSES:
+                old_map = folder/f"{prefix}_mean_map.png"
+                if old_map.is_file():
+                    old_map.unlink()
+                continue
             value_text = f"{average:.4f}" if average is not None else "no cases"
             figure = _draw(averages,universe,metric,f"Dynamic stability: {status} (n={len(selected_cases)})",
                            f"Per-unit mean: equal weight per available active case\nMVA-weighted population mean = {value_text}",
@@ -212,7 +223,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     clustering_paths = export_clustering(analysis, out)
     figures.extend(clustering_paths)
     report(f"Spatial stability: saved {len(clustering_paths)} clustering/PCA figure(s)")
-    total_maps = 2 * len(mapped_cases)
+    plotted_cases = tuple(case for case in mapped_cases if case.assessment.status in PLOT_STATUSES)
+    total_maps = 2 * len(plotted_cases)
     completed_maps = 0
     last_report = monotonic()
     report(f"Spatial stability: creating {total_maps} individual maps; summary figures are already saved")
@@ -220,6 +232,11 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         directory = out/folder_name
         (directory/"by_case").mkdir(parents=True, exist_ok=True)
         for case in mapped_cases:
+            if case.assessment.status not in PLOT_STATUSES:
+                old_map = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
+                if old_map.is_file():
+                    old_map.unlink()
+        for case in plotted_cases:
             selected = tuple(p for p in points if p.case_id == case.case_id)
             row = next(row for row in case_rows if row["case_id"] == case.case_id)
             value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
@@ -244,6 +261,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                     counts={status:sum(c.assessment.status==status for c in cases) for status in STATUS_DIRECTORIES},
                     mapped_counts={status:sum(c.assessment.status==status for c in mapped_cases) for status in STATUS_DIRECTORIES},
                     cases=len(cases),mapped_cases=len(mapped_cases),devices=len(unique),points=len(points),excluded_devices=len(analysis.excluded_devices),
+                    plotted_statuses=list(PLOT_STATUSES),
+                    hidden_not_evaluated=[c.case_id for c in mapped_cases if c.assessment.status not in PLOT_STATUSES],
                     skipped_runs=[asdict(item) for item in analysis.skipped_runs],
                     xi_formula="Kp/(2*sqrt(Ki))",fn_formula_hz="sqrt(Ki)/(2*pi)",frequency_bands=FN_LABELS,
                     frequency_boundary_rule="lower inclusive, upper exclusive; final band >=20 Hz",

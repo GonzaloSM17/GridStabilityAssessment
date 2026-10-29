@@ -62,7 +62,7 @@ class SpatialProgressTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Interrupted"):
                 export_maps(analysis, out, self.assets, self.profile, self.runs,
                             progress=messages.append)
-        self.assertEqual(len(list((out / "distributions_by_stability").glob("*.png"))), 4)
+        self.assertEqual(len(list((out / "distributions_by_stability").glob("*.png"))), 5)
         for metric in ("xi", "fn"):
             for status in ("stable", "unstable"):
                 self.assertTrue((out / f"{metric}_maps/by_stability/{status}/{metric}_mean_map.png").is_file())

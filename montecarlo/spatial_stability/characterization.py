@@ -30,7 +30,7 @@ from threadpoolctl import threadpool_limits
 from .clustering import FEATURES, build_case_profiles
 from .distributions import _csv, load_saved_analysis
 from .weighted_pca import weighted_profiles
-from .tree_profiles import export_descriptive_trees, FILES as TREE_PROFILE_FILES
+from .tree_profiles import export_global_descriptive_trees, build_global_tree_inputs, FILES as TREE_PROFILE_FILES
 
 FEATURE_NAMES = (*FEATURES, "xi_fn_correlation")
 FAMILIES = ("logistic", "interactions", "tree", "forest", "boosting", "svm", "naive_bayes")
@@ -286,8 +286,6 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
                             outer_folds=5, inner_folds=3, seed=1900, progress=None):
     """Save an independent report; existing clustering PNGs are never written."""
     ids, y, matrices, excluded = build_inputs(analysis)
-    result = compare_models(matrices, y, families=families, repeats=repeats,
-        outer_folds=outer_folds, inner_folds=inner_folds, seed=seed, progress=progress)
     out = Path(output_directory)/"stability_characterization"
     out.mkdir(parents=True, exist_ok=True)
     if (out/"characterization_metadata.json").is_file():
@@ -301,6 +299,10 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
                          for name,v in zip(FEATURE_NAMES, values[i])})
                   for basis, values in matrices.items() for i,c in enumerate(ids)]
     _csv(out/"case_features.csv", input_rows, ["basis", "case_id", "status", *FEATURE_NAMES])
+    tree_paths = export_global_descriptive_trees(analysis, out, seed=seed)
+    tree_metadata = json.loads((out/"tree_profile_metadata.json").read_text(encoding="utf-8"))
+    result = compare_models(matrices, y, families=families, repeats=repeats,
+        outer_folds=outer_folds, inner_folds=inner_folds, seed=seed, progress=progress)
     metadata = dict(status=result["status"], reason=result["reason"], n_cases=len(ids),
         stable=int(np.sum(y == 0)), unstable=int(np.sum(y == 1)), excluded=excluded,
         native_criterion=("Existing voltage + modal damping + angle aggregation, unchanged"
@@ -310,11 +312,14 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
         missing_correlation="Training-fold median imputation plus missingness indicator; never imputed using test cases",
         scope="Exploratory within one study; feature hypotheses were motivated by earlier analyses of this same sample. Confirmation needs new simulations.",
         interpretation="Conditional predictive association, not physical causality. Partition SD is not a confidence interval. Repeats share cases. No simulated label is replaced by a model output.",
-        figures=[])
+        tree_n_cases=len(tree_metadata.get("case_ids", [])),
+        tree_case_ids=tree_metadata.get("case_ids", []), tree_features=tree_metadata.get("features", []),
+        figures=[p.name for p in tree_paths])
     if result["status"] != "fitted":
         (out/"characterization_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        (out/"README.md").write_text(result["reason"]+"\n", encoding="utf-8")
-        return ()
+        (out/"README.md").write_text(result["reason"]+"\n\n"+
+            ("Arboles globales disponibles: TREE_PROFILES.md.\n" if tree_paths else ""), encoding="utf-8")
+        return tree_paths
     metadata.update(config=result["config"], elapsed_seconds=result["elapsed_seconds"])
     _csv(out/"model_summary.csv", result["summaries"], list(result["summaries"][0]))
     _csv(out/"block_contribution.csv", result["blocks"],
@@ -336,7 +341,7 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
     _csv(out/"cv_predictions.csv", predictions, list(predictions[0]))
     result["case_ids"] = ids
     result["native_assessments"] = {c.case_id:c.assessment for c in analysis.cases}
-    paths = _export_figures(out, matrices, y, result)
+    paths = tuple(sorted((*tree_paths, *_export_figures(out, matrices, y, result)), key=lambda p: p.name))
     metadata["figures"] = [p.name for p in paths]
     (out/"characterization_metadata.json").write_text(
         json.dumps(metadata, indent=2, allow_nan=False), encoding="utf-8")
@@ -426,10 +431,6 @@ def _export_figures(out, matrices, y, result):
                  "Los resumenes principales promedian todas las repeticiones")
     save(fig, "03_validation_curves.png")
 
-    paths.extend(export_descriptive_trees(
-        out, matrices, y, result["case_ids"], result["native_assessments"],
-        seed=result["config"]["seed"]))
-
     fig = figure(13, 7)
     axes = fig.subplots(1, 2, sharey=True)
     association_rows = []
@@ -481,7 +482,8 @@ def _description(result, metadata):
         "Los nueve indicadores surgieron de analisis previos de esta muestra. Esta validacion "
         "es exploratoria dentro de la misma campana; no es una prueba externa independiente.", "",
         "01: comparacion AUC por familia e indicadores; 02: ablacion de bloques logistica; "
-        "03: curvas de primera repeticion prefijada; 04: arboles descriptivos ajustados con "
+        "03: curvas de primera repeticion prefijada; 04: arboles globales (promedios xi/fn y "
+        "dispersiones xi/fn; sin indicadores por tecnologia) descriptivos ajustados con "
         "todos los datos, con medianas por clase y fallos de criterios dentro de cada hoja "
         "(sus umbrales no son limites operativos ni validacion). Las versiones units/mva "
         "permiten leer los perfiles en detalle; TREE_PROFILES.md explica la lectura. "
@@ -526,16 +528,17 @@ def main():
     analysis = load_saved_analysis(args.results)
     output = select_output_directory(args.output)
     if args.trees_only:
-        ids,y,matrices,_ = build_inputs(analysis)
+        ids,y,matrices,_ = build_global_tree_inputs(analysis)
         out = output/"stability_characterization"
         previous = out/"characterization_metadata.json"
         metadata = json.loads(previous.read_text(encoding="utf-8")) if previous.is_file() else None
         seed = metadata.get("config",{}).get("seed",1900) if metadata else 1900
-        paths = export_descriptive_trees(out,matrices,y,ids,
-            {c.case_id:c.assessment for c in analysis.cases},seed=seed)
-        if metadata and metadata.get("case_ids") == list(ids):
+        paths = export_global_descriptive_trees(analysis,out,seed=seed)
+        if metadata:
             metadata["figures"] = list(dict.fromkeys([*metadata.get("figures",[]),*[p.name for p in paths]]))
-            metadata["tree_profiles"] = "Class-specific leaf medians and native failure counts; TREE_PROFILES.md"
+            metadata["tree_profiles"] = "Four global xi/fn means and dispersions; TREE_PROFILES.md"
+            metadata["tree_case_ids"] = list(ids)
+            metadata["tree_native_criterion"] = analysis.criterion_description
             previous.write_text(json.dumps(metadata,indent=2,allow_nan=False),encoding="utf-8")
         readme = out/"README.md"
         if readme.is_file() and "TREE_PROFILES.md" not in readme.read_text(encoding="utf-8"):

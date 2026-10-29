@@ -16,6 +16,7 @@ from stability.dynamic_stability import assess_dynamic_stability, assess_monte_c
 from .models import SpatialControllerPoint, SpatialCaseAssessment, SpatialStabilityAnalysis, SpatialSkippedRun
 
 STATUSES = ("Stable", "Unstable", "Not evaluated")
+PLOT_STATUSES = ("Stable", "Unstable")
 COLORS = {"Stable":"#0072B2", "Unstable":"#D55E00", "Not evaluated":"#777777"}
 LABELS = {"Stable":"Estable", "Unstable":"Inestable", "Not evaluated":"No evaluado"}
 
@@ -111,7 +112,7 @@ def population_ecdfs(analysis):
 
 
 def _statuses(rows):
-    return [s for s in STATUSES if s!="Not evaluated" or any(r["status"]==s for r in rows)]
+    return list(PLOT_STATUSES)
 
 
 def _ecdf_panel(axis,rows,key,xlabel,statuses,*,factor=1.):
@@ -139,8 +140,39 @@ def _box_panel(axis,rows,key,ylabel,statuses,*,factor=1.):
     axis.grid(axis="y",alpha=.2)
 
 
+def export_case_weighted_means(analysis, output_directory):
+    """Save only the two box-and-point panels of case-level MVA-weighted means."""
+    import matplotlib.pyplot as plt
+    rows = case_features(analysis)
+    statuses = _statuses(rows)
+    out = Path(output_directory)/"distributions_by_stability"
+    out.mkdir(parents=True,exist_ok=True)
+    figure, axes = plt.subplots(1,2,figsize=(12,5),layout="constrained")
+    for axis,key,label in zip(axes,("weighted_xi","weighted_fn_hz"),
+                              ("xi ponderado por MVA","fn ponderada por MVA [Hz]")):
+        _box_panel(axis,rows,key,label,statuses)
+    figure.suptitle("Promedios ponderados por MVA segun estabilidad dinamica\n"
+                   "Cada punto es una corrida; igual peso por caso",fontsize=13)
+    path = out/"05_case_weighted_means.png"
+    try:
+        figure.savefig(path,dpi=170)
+    finally:
+        plt.close(figure)
+    metadata = dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,
+                    voltage_scope=analysis.voltage_scope,
+                    features=["weighted_xi","weighted_fn_hz"],
+                    counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
+                    plotted_statuses=list(PLOT_STATUSES),
+                    hidden_not_evaluated=sum(r["status"]=="Not evaluated" for r in rows),
+                    case_weighting="MVA-weighted mean within each case; equal case weight in distributions",
+                    source_panels="Lower two box-and-point panels of 01_case_parameter_distributions.png",
+                    figure=path.name)
+    (out/"05_case_weighted_means_metadata.json").write_text(json.dumps(metadata,indent=2),encoding="utf-8")
+    return path
+
+
 def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, high_fn_threshold_hz=10.):
-    """Save four descriptive PNGs and auditable CSVs without opening figures."""
+    """Save five descriptive PNGs and auditable CSVs without opening figures."""
     import matplotlib.pyplot as plt
     rows=case_features(analysis,low_xi_threshold,high_fn_threshold_hz)
     tech_rows=technology_features(analysis);curves=population_ecdfs(analysis)
@@ -152,7 +184,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
     _csv(out/"population_ecdf.csv",curves,["status","metric","value","cumulative_mva_fraction","n_cases"])
     summary=[]
     numeric=[key for key in rows[0] if key not in {"case_id","status","n_devices","included_mva"}]
-    for status in statuses:
+    for status in STATUSES:
         selected=[row for row in rows if row["status"]==status]
         for key in numeric:
             values=np.array([r[key] for r in selected])
@@ -206,7 +238,9 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
             axes[row,col].set_title(technology)
     fig.suptitle("Distribuciones por tecnologia y estabilidad dinamica\nCada punto es el promedio ponderado de esa tecnologia en una corrida",fontsize=13)
     save(fig,"04_technology_case_distributions.png")
+    paths.append(export_case_weighted_means(analysis, output_directory))
     metadata=dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
+                  plotted_statuses=list(PLOT_STATUSES),hidden_not_evaluated=sum(r["status"]=="Not evaluated" for r in rows),
                   cases=len(rows),devices=len({p.device_id for p in analysis.points}),
                   case_weighting="One observation per run; equal run weight, including within each technology",
                   population_ecdf_weighting="For each class: each run has mass 1/n_runs; each active unit has its within-run MVA fraction of that mass",
@@ -215,7 +249,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
                   interpretation="Descriptive class comparisons; no causal effects or significance claims. Unit observations within a case are not independent simulation cases.",
                   missing_classes="Retained as empty labeled groups, never replaced by zero-valued cases",figures=[p.name for p in paths])
     (out/"distribution_metadata.json").write_text(json.dumps(metadata,indent=2),encoding="utf-8")
-    (out/"README.md").write_text(f"# Distribuciones por estabilidad\n\n01: ECDF y cajas de xi/fn medios ponderados por MVA de cada corrida. En las cajas, cada punto es un caso; la caja muestra percentiles 25-75 y mediana, los bigotes siguen la regla de 1.5 IQR.\n\n02: ECDF y cajas del porcentaje MVA con xi < {low_xi_threshold:g}, fn >= {high_fn_threshold_hz:g} Hz y ambas condiciones. Son umbrales exploratorios y no cambian el criterio de estabilidad; los valores configurados se registran en distribution_metadata.json.\n\n03: ECDF de los valores de cada dispositivo. Cada caso pesa igual y dentro del caso se pondera por su fraccion de MVA. Es una distribucion descriptiva de capacidad, no miles de corridas independientes.\n\n04: promedios por caso separados por prefijo de tecnologia. Tecnologias ausentes no se reemplazan por cero.\n\nAzul: estable; naranja: inestable; gris: no evaluado si existe. Criterio: {analysis.criterion_description}. Los grupos se normalizan independientemente para comparar tamanos distintos. No se dibujan curvas suavizadas ni se calculan pruebas de significancia a partir de unidades repetidas.\n",encoding="utf-8")
+    (out/"README.md").write_text(f"# Distribuciones por estabilidad\n\n01: ECDF y cajas de xi/fn medios ponderados por MVA de cada corrida. En las cajas, cada punto es un caso; la caja muestra percentiles 25-75 y mediana, los bigotes siguen la regla de 1.5 IQR.\n\n02: ECDF y cajas del porcentaje MVA con xi < {low_xi_threshold:g}, fn >= {high_fn_threshold_hz:g} Hz y ambas condiciones. Son umbrales exploratorios y no cambian el criterio de estabilidad; los valores configurados se registran en distribution_metadata.json.\n\n03: ECDF de los valores de cada dispositivo. Cada caso pesa igual y dentro del caso se pondera por su fraccion de MVA. Es una distribucion descriptiva de capacidad, no miles de corridas independientes.\n\n04: promedios por caso separados por prefijo de tecnologia. Tecnologias ausentes no se reemplazan por cero.\n\n05_case_weighted_means.png: solo las dos cajas con puntos de los promedios globales xi/fn ponderados por MVA, sin ECDF.\n\nAzul: estable; naranja: inestable. Los casos no evaluados se conservan en los CSV pero no se dibujan. Criterio: {analysis.criterion_description}. Los grupos se normalizan independientemente para comparar tamanos distintos. No se dibujan curvas suavizadas ni se calculan pruebas de significancia a partir de unidades repetidas.\n",encoding="utf-8")
     return tuple(paths)
 
 
