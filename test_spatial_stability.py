@@ -202,7 +202,7 @@ class SpatialStabilityTests(unittest.TestCase):
         c=components()
         with patch("single_run.voltage_stability.SingleRunVoltageStability.analyze",side_effect=AssertionError("Unexpected reanalysis")):
             result=workbench.create_spatial_stability(output_directory=self.root/"out",**c)
-        self.assertEqual(len(result.figure_paths),11)
+        self.assertEqual(len(result.figure_paths),9)
         self.assertTrue(all(p.is_file() and p.suffix==".png" for p in result.figure_paths))
         self.assertFalse(list(result.output_directory.rglob("*.svg")))
         self.assertTrue((result.output_directory/"fn_maps/by_case/fn_map_run_000001.png").is_file())
@@ -231,7 +231,7 @@ class SpatialStabilityTests(unittest.TestCase):
         context_picker.assert_called_once_with();assets_picker.assert_called_once_with()
         result=workbench.create_spatial_stability()
         self.assertEqual(result.output_directory,(study_path/"analysis_outputs/05_Spatial_Stability").resolve())
-        self.assertEqual(len(result.figure_paths),13)
+        self.assertEqual(len(result.figure_paths),11)
         self.assertEqual([case.assessment.status for case in result.analysis.cases],["Stable","Unstable"])
         metadata=json.loads((result.output_directory/"spatial_metadata.json").read_text())
         self.assertEqual(metadata["counts"],{"Stable":1,"Unstable":1,"Not evaluated":0})
@@ -247,8 +247,10 @@ class SpatialStabilityTests(unittest.TestCase):
         self.assertEqual(len(clustering["excluded_cases"]),2)
         stable=result.output_directory/"xi_maps/by_stability/stable"
         unstable=result.output_directory/"xi_maps/by_stability/unstable"
-        self.assertTrue((stable/"xi_mean_map.png").is_file())
-        self.assertTrue((unstable/"xi_mean_map.png").is_file())
+        self.assertTrue((result.output_directory/"xi_maps/xi_mean_map.png").is_file())
+        self.assertTrue((result.output_directory/"fn_maps/fn_mean_map.png").is_file())
+        self.assertFalse((stable/"xi_mean_map.png").exists())
+        self.assertFalse((unstable/"xi_mean_map.png").exists())
         self.assertFalse((stable.parent/"dynamic").exists())
         def read_rows(path):
             with path.open(encoding="utf-8-sig",newline="") as stream:return list(csv.DictReader(stream))

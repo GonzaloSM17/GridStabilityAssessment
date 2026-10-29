@@ -64,8 +64,7 @@ class SpatialProgressTests(unittest.TestCase):
                             progress=messages.append)
         self.assertEqual(len(list((out / "distributions_by_stability").glob("*.png"))), 5)
         for metric in ("xi", "fn"):
-            for status in ("stable", "unstable"):
-                self.assertTrue((out / f"{metric}_maps/by_stability/{status}/{metric}_mean_map.png").is_file())
+            self.assertTrue((out / f"{metric}_maps/{metric}_mean_map.png").is_file())
         with (out / "case_assessments.csv").open(encoding="utf-8-sig", newline="") as stream:
             self.assertEqual([row["status"] for row in csv.DictReader(stream)],
                              ["Stable", "Unstable", "Stable"])

@@ -1,7 +1,7 @@
 """PNG-only xi/fn maps, with a common drawing/size/color scale across runs."""
 from collections import defaultdict
 from dataclasses import asdict, replace
-from math import ceil, isfinite
+from math import ceil, floor, isfinite, log10
 from pathlib import Path
 from statistics import mean
 import csv
@@ -59,6 +59,135 @@ def mean_points(points, case_ids):
                          n_cases_in_class=len(case_ids), mean_xi=point.xi, mean_fn_hz=point.fn_hz,
                          frequency_band=frequency_band(point.fn_hz)))
     return tuple(results), rows
+
+
+def _nice_numeric_scale(values, *, target_intervals=5):
+    """Return enclosing decimal limits and ticks for a continuous colour scale."""
+    minimum, maximum = min(values), max(values)
+    span = maximum - minimum or abs(minimum) * 0.2 or 0.1
+    target_step = span / target_intervals
+    magnitude = 10.0 ** floor(log10(target_step))
+    step = min(
+        (factor * magnitude for factor in (1.0, 2.0, 5.0, 10.0)),
+        key=lambda candidate: abs(candidate - target_step),
+    )
+    lower = floor(minimum / step) * step
+    upper = ceil(maximum / step) * step
+    if lower == upper:
+        lower -= step
+        upper += step
+    count = int(round((upper - lower) / step))
+    ticks = tuple(round(lower + index * step, 12) for index in range(count + 1))
+    return round(lower, 12), round(upper, 12), ticks
+
+
+def _frequency_labels(fn_edges):
+    """Label every displayed frequency band with finite, rounded endpoints."""
+    return tuple(
+        f"{lower:g}-{upper:g} Hz"
+        for lower, upper in zip(fn_edges, fn_edges[1:])
+    )
+
+
+def _draw_mean_comparison(
+    stable_points,
+    unstable_points,
+    universe,
+    metric,
+    bounds,
+    xi_limits,
+    xi_ticks,
+    fn_edges,
+    size_factor,
+    stable_count,
+    unstable_count,
+):
+    """Draw Stable and Unstable class means side by side on shared map scales."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import BoundaryNorm, Normalize
+
+    figure, axes = plt.subplots(1, 2, figsize=(17, 8.5), layout="constrained")
+    if metric == "xi":
+        cmap, norm = plt.get_cmap("viridis"), Normalize(*xi_limits)
+        color_label = "PLL damping ratio xi"
+    else:
+        cmap = plt.get_cmap("viridis", len(fn_edges) - 1)
+        norm = BoundaryNorm(fn_edges, cmap.N, clip=True)
+        color_label = "PLL natural-frequency band"
+
+    sizes = sorted({
+        min(point.nominal_power_mva for point in universe),
+        float(np.median([point.nominal_power_mva for point in universe])),
+        max(point.nominal_power_mva for point in universe),
+    })
+    handles = [
+        axes[0].scatter(
+            [], [], s=value * size_factor, facecolors="none", edgecolors="grey",
+            label=f"{value:g} MVA",
+        )
+        for value in sizes
+    ]
+    for axis, status, points, count in (
+        (axes[0], "Stable", stable_points, stable_count),
+        (axes[1], "Unstable", unstable_points, unstable_count),
+    ):
+        visible = points if points else universe
+        axis.scatter(
+            [point.x for point in visible],
+            [point.y for point in visible],
+            s=[point.nominal_power_mva * size_factor for point in visible],
+            facecolors="none", edgecolors="#8A8A8A", linewidths=0.6,
+        )
+        axis.scatter(
+            [point.x for point in points],
+            [point.y for point in points],
+            s=[point.nominal_power_mva * size_factor for point in points],
+            c=[getattr(point, metric) for point in points], cmap=cmap, norm=norm,
+            edgecolors="#1A1A1A", linewidths=0.4,
+        )
+        if not points:
+            axis.text(
+                0.5, 0.5, "NO CASES IN THIS CLASS", ha="center", va="center",
+                transform=axis.transAxes,
+                bbox=dict(facecolor="white", alpha=0.9, edgecolor="grey"),
+            )
+        axis.set(
+            xlim=bounds[:2], ylim=bounds[2:], aspect="equal",
+            xlabel="posX (EMTP drawing units)", ylabel="posY (EMTP drawing units)",
+            title=f"{status} (n={count})",
+        )
+        axis.grid(alpha=0.15)
+
+    color_source = ScalarMappable(norm=norm, cmap=cmap)
+    color_source.set_array([])
+    if metric == "xi":
+        colorbar = figure.colorbar(color_source, ax=axes.tolist(), shrink=0.78)
+        colorbar.set_label(color_label)
+        colorbar.set_ticks(xi_ticks)
+    else:
+        centers = (np.array(fn_edges[:-1]) + np.array(fn_edges[1:])) / 2
+        colorbar = figure.colorbar(
+            color_source, ax=axes.tolist(), shrink=0.78, boundaries=fn_edges,
+            ticks=centers, spacing="uniform",
+        )
+        colorbar.ax.set_yticklabels(_frequency_labels(fn_edges))
+        colorbar.set_label(color_label)
+    figure.legend(
+        handles=handles, title="Area proportional to MVA", loc="outside lower center",
+        ncols=len(handles), fontsize=8,
+    )
+    title = (
+        "Mean PLL damping ratio by dynamic-stability class"
+        if metric == "xi"
+        else "Mean PLL natural-frequency band by dynamic-stability class"
+    )
+    figure.suptitle(
+        f"{title}\nPer-unit mean across available active cases; common position, size and colour scales",
+        fontsize=12,
+    )
+    return figure
 
 
 def _draw(points, universe, metric, title, subtitle, bounds, xi_limits, fn_edges, size_factor, scale_context="Common scales across runs"):
@@ -155,8 +284,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         groups[status] = (ids, averages, rows)
     group_xi = [point.xi for status, (_, averages, _) in groups.items()
                 if status in PLOT_STATUSES for point in averages]
-    group_limits = (min(group_xi), max(group_xi)) if group_xi else (lo, hi)
-    if group_limits[0] == group_limits[1]: group_limits = (group_limits[0], group_limits[0]+1.)
+    group_lower, group_upper, group_ticks = _nice_numeric_scale(group_xi or [lo, hi])
+    group_limits = (group_lower, group_upper)
     stable_rows = {row["device_id"]: row for row in groups["Stable"][2]}
     unstable_rows = {row["device_id"]: row for row in groups["Unstable"][2]}
     comparison = []
@@ -207,15 +336,26 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                 if old_map.is_file():
                     old_map.unlink()
                 continue
-            value_text = f"{average:.4f}" if average is not None else "no cases"
-            figure = _draw(averages,universe,metric,f"Dynamic stability: {status} (n={len(selected_cases)})",
-                           f"Per-unit mean: equal weight per available active case\nMVA-weighted population mean = {value_text}",
-                           bounds,group_limits,fn_edges,size_factor,
-                           scale_context="Common scales across stability groups")
-            path = folder/f"{prefix}_mean_map.png"
-            try: figure.savefig(path,dpi=150)
-            finally: plt.close(figure)
-            figures.append(path)
+            old_map = folder/f"{prefix}_mean_map.png"
+            if old_map.is_file():
+                old_map.unlink()
+        figure = _draw_mean_comparison(
+            groups["Stable"][1],
+            groups["Unstable"][1],
+            universe,
+            metric,
+            bounds,
+            group_limits,
+            group_ticks,
+            fn_edges,
+            size_factor,
+            len(groups["Stable"][0]),
+            len(groups["Unstable"][0]),
+        )
+        path = directory/f"{prefix}_mean_map.png"
+        try: figure.savefig(path,dpi=150)
+        finally: plt.close(figure)
+        figures.append(path)
     _write_csv(out/"stability_group_summary.csv", summary, list(summary[0]))
     report("Spatial stability: mean maps by stability saved")
     from .clustering import export_clustering
@@ -267,7 +407,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                     skipped_runs=[asdict(item) for item in analysis.skipped_runs],
                     xi_formula="Kp/(2*sqrt(Ki))",fn_formula_hz="sqrt(Ki)/(2*pi)",frequency_bands=FN_LABELS,
                     frequency_boundary_rule="lower inclusive, upper exclusive; final band >=20 Hz",
-                    xi_color_limits=[lo,hi],xi_group_color_limits=list(group_limits),position_bounds=bounds,marker_area_per_mva=size_factor,
+                    xi_color_limits=[lo,hi],xi_group_color_limits=list(group_limits),xi_group_color_ticks=list(group_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
                     group_membership={status:sorted(group[0]) for status,group in groups.items()},
                     weighting="Point area proportional to MVA; repeated active controllers share asset MVA. Equal case weight per active unit for class means. Population mean weighted by MVA per run then equally across runs.",
                     missing_data="Missing evidence is retained as Not evaluated according to native aggregation; not included in Stable means. Excluded coordinates/assets listed in excluded_devices.csv.",
