@@ -1615,8 +1615,11 @@ class AnalysisPipeline:
                 label="Controller point",
             )
         axis.set_xscale("log")
-        axis.set_xticks((2.0, 5.0, 10.0, 20.0, 50.0, 60.0))
-        axis.set_xticklabels(("2", "5", "10", "20", "50", "60"))
+        # A logarithmic axis cannot retain the linear figure's zero lower bound.
+        # The positive 1 Hz margin gives visual room before the 2 Hz design range.
+        axis.set_xlim(1.0, FN_PLOT_LIMITS_HZ[1])
+        axis.set_xticks((1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 60.0))
+        axis.set_xticklabels(("1", "2", "5", "10", "20", "50", "60"))
         axis.legend(
             loc="lower right",
             bbox_to_anchor=(0.99, 0.01),
@@ -1797,8 +1800,8 @@ class AnalysisPipeline:
             (False, failed_label, "tab:red"),
         )
         dimensions = (
-            ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (2.0, 20.0)),
-            ("xi", "Power-weighted damping ratio, xi", (0.6, 1.0)),
+            ("fn_hz", "Power-weighted natural frequency, fn (Hz)", (1.0, 21.0)),
+            ("xi", "Power-weighted damping ratio, xi", (0.5, 1.1)),
         )
         for axis, (attribute, label, x_limits) in zip(axes, dimensions):
             for is_settled, group_label, color in groups:
