@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
 from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
@@ -103,7 +105,10 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         for name in generated:
             path = out/name
             if path.is_file():
-                path.unlink()
+                if path.suffix == ".png":
+                    remove_figure_with_spanish_copy(path)
+                else:
+                    path.unlink()
     ids = tuple(case_ids)
     if len(ids) != len(set(ids)):
         raise ValueError("Duplicate selected case IDs")
@@ -210,7 +215,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
                      "fn y estabilidad no intervienen en esta nueva separacion; G1/G2 son relativos a la muestra")
         path = out/"09_xi_groups_weighted_pca.png"
         try:
-            fig.savefig(path, dpi=170)
+            save_figure_with_spanish_copy(fig, path, dpi=170)
         finally:
             fig.clear()
         paths = (path,)

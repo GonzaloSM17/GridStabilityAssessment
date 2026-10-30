@@ -6,6 +6,11 @@ from sklearn.tree import DecisionTreeClassifier, export_text
 from .clustering import FEATURES
 from dataclasses import replace
 from .distributions import _csv, case_features
+from utils.figure_localization import (
+    remove_figure_with_spanish_copy,
+    save_figure_with_spanish_copy,
+    spanish_copy_path,
+)
 
 NAMES = ("xi BESS", "xi PE", "xi PFV", "xi PMGD",
          "fn BESS [Hz]", "fn PE [Hz]", "fn PFV [Hz]", "fn PMGD [Hz]", "Disp. xi")
@@ -239,13 +244,17 @@ def export_descriptive_trees(out, matrices, y, case_ids, assessments, *, seed=19
                      fontsize=14)
         path = out/name
         temporary = path.with_name(path.stem+"_pending.png")
+        temporary_spanish = spanish_copy_path(temporary)
         try:
-            fig.savefig(temporary,dpi=170)
+            save_figure_with_spanish_copy(fig, temporary, dpi=170)
             temporary.replace(path)
+            temporary_spanish.replace(spanish_copy_path(path))
         finally:
             fig.clear()
             if temporary.is_file():
                 temporary.unlink()
+            if temporary_spanish.is_file():
+                temporary_spanish.unlink()
         paths.append(path)
     fig = figure(23)
     axes = fig.subplots(2,1)
@@ -332,7 +341,10 @@ def export_global_descriptive_trees(analysis, out, *, seed=1900):
         for name in FILES:
             path = out/name
             if path.is_file():
-                path.unlink()
+                if path.suffix == ".png":
+                    remove_figure_with_spanish_copy(path)
+                else:
+                    path.unlink()
         metadata = dict(status="not_fitted", reason="Need both evaluated native stability classes",
                         features=list(GLOBAL_FEATURES), case_ids=list(ids))
         (out/"tree_profile_metadata.json").write_text(json.dumps(metadata,indent=2),encoding="utf-8")

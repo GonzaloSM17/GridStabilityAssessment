@@ -18,6 +18,7 @@ from stability.angular import (
 )
 from stability.scenario import ContingencyScenario
 from stability.plotting import close_y_axis
+from utils.figure_localization import save_figure_with_spanish_copy
 
 SignalSelector = Callable[[str], bool]
 
@@ -392,7 +393,7 @@ class GeneralOverview:
 
             figure = self._create_figure(definition, matched_plots, maximum_time_s)
             path = output_path / definition.filename
-            figure.savefig(path, dpi=150)
+            save_figure_with_spanish_copy(figure, path, dpi=150)
             plt.close(figure)
             figure_paths.append(path)
 

@@ -1564,6 +1564,69 @@ class AnalysisPipeline:
         figure.tight_layout()
         return figure
 
+    def plot_weighted_controllers_log_fn(
+        self,
+        analysis: ControllerStudyAnalysis,
+        study_analysis: StudyAnalysis | None = None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
+    ):
+        """Plot nominal-power-weighted controller points with logarithmic fn."""
+        figure, axis = self._create_controller_figure(
+            self._controller_figure_title(
+                "Nominal-power-weighted controller point by run (log fn)",
+                study_analysis,
+                dynamic_stability_analysis,
+            )
+        )
+        stable_run_ids = self._stable_run_ids(
+            study_analysis,
+            dynamic_stability_analysis,
+        )
+        stable_points = [
+            point for point in analysis.weighted_run_points if point.run_id in stable_run_ids
+        ]
+        unstable_points = [
+            point for point in analysis.weighted_run_points if point.run_id not in stable_run_ids
+        ]
+        axis.scatter(
+            [point.fn_hz for point in stable_points],
+            [point.xi for point in stable_points],
+            s=22,
+            color="tab:blue",
+            alpha=0.55,
+            label="Stable",
+        )
+        if study_analysis is not None:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=22,
+                color="tab:red",
+                alpha=0.65,
+                label="Unstable",
+            )
+        elif unstable_points:
+            axis.scatter(
+                [point.fn_hz for point in unstable_points],
+                [point.xi for point in unstable_points],
+                s=22,
+                color="tab:blue",
+                alpha=0.55,
+                label="Controller point",
+            )
+        axis.set_xscale("log")
+        axis.set_xticks((2.0, 5.0, 10.0, 20.0, 50.0, 60.0))
+        axis.set_xticklabels(("2", "5", "10", "20", "50", "60"))
+        axis.legend(
+            loc="lower right",
+            bbox_to_anchor=(0.99, 0.01),
+            ncol=4,
+            fontsize=7,
+            framealpha=0.92,
+        )
+        figure.tight_layout()
+        return figure
+
     def plot_fault_on_area_vs_weighted_controllers(
         self,
         controller_analysis: ControllerStudyAnalysis,
@@ -1881,11 +1944,15 @@ class AnalysisPipeline:
         measurement: Measurement,
         initialization_criteria: InitializationCriteria | None = None,
         stability_criteria: StabilityCriteria | None = None,
+        *,
+        evaluate_despite_initialization: bool = False,
     ) -> SignalStudyAnalysis:
         """Analyze the currently supported RMS-voltage measurement.
 
-        Stability is evaluated only when the run passes initialization. Each run's
-        Parquet signal is read once for this analysis.
+        Stability is normally evaluated only when the run passes initialization.
+        A deterministic study can set ``evaluate_despite_initialization`` to
+        retain initialization as an observation while still evaluating the full
+        post-contingency response. Each run's signal is read once.
         """
         if measurement.kind != VOLTAGE_RMS:
             raise ValueError(
@@ -1917,7 +1984,7 @@ class AnalysisPipeline:
                 continue
 
             stability = None
-            if initialization.is_well_initialized:
+            if initialization.is_well_initialized or evaluate_despite_initialization:
                 if time_values[-1] >= stability_criteria.minimum_simulation_end_time_s:
                     try:
                         stability = assess_stability(

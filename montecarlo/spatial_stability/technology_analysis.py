@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import numpy as np
 
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
+
 from .distributions import _csv, _validate
 
 
@@ -176,7 +178,10 @@ def export_technology_analysis(analysis, out, result, *, low_xi_threshold=.7, mi
         for name in generated:
             path = out / name
             if path.is_file():
-                path.unlink()
+                if path.suffix == ".png":
+                    remove_figure_with_spanish_copy(path)
+                else:
+                    path.unlink()
     mapped_ids={point.case_id for point in analysis.points}
     evaluated = sum(c.case_id in mapped_ids and c.assessment.status in {"Stable", "Unstable"} for c in analysis.cases)
     metadata = dict(low_xi_threshold=low_xi_threshold, min_cases=min_cases,
@@ -195,7 +200,7 @@ def export_technology_analysis(analysis, out, result, *, low_xi_threshold=.7, mi
     def save(fig, name):
         path = out / name
         try:
-            fig.savefig(path, dpi=170)
+            save_figure_with_spanish_copy(fig, path, dpi=170)
         finally:
             fig.clear()
         paths.append(path)

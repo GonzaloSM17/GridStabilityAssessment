@@ -241,14 +241,16 @@ class SpatialStabilityTests(unittest.TestCase):
             ["Stable", "Unstable"],
         )
         self.assertTrue(all(p.is_file() for p in result.figure_paths))
-        self.assertEqual(len(list((result.output_directory/"distributions_by_stability").glob("*.png"))),5)
+        self.assertEqual(len(list((result.output_directory/"distributions_by_stability").glob("*.png"))),10)
         clustering=json.loads((result.output_directory/"clustering/clustering_metadata.json").read_text(encoding="utf-8"))
         self.assertEqual(clustering["status"],"not_fitted")
         self.assertEqual(len(clustering["excluded_cases"]),2)
         stable=result.output_directory/"xi_maps/by_stability/stable"
         unstable=result.output_directory/"xi_maps/by_stability/unstable"
         self.assertTrue((result.output_directory/"xi_maps/xi_mean_map.png").is_file())
+        self.assertTrue((result.output_directory/"xi_maps/xi_mean_map_ES.png").is_file())
         self.assertTrue((result.output_directory/"fn_maps/fn_mean_map.png").is_file())
+        self.assertTrue((result.output_directory/"fn_maps/fn_mean_map_ES.png").is_file())
         self.assertFalse((stable/"xi_mean_map.png").exists())
         self.assertFalse((unstable/"xi_mean_map.png").exists())
         self.assertFalse((stable.parent/"dynamic").exists())

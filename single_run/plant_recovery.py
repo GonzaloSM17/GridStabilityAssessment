@@ -13,6 +13,7 @@ from stability.plant_recovery import (
 )
 from stability.plotting import close_y_axis
 from stability.scenario import ContingencyScenario
+from utils.figure_localization import save_figure_with_spanish_copy
 
 PLANT_TYPES = (
     ("PV", "PFV"),
@@ -137,7 +138,7 @@ class SingleRunPlantRecovery:
         for index, (technology, _) in enumerate(PLANT_TYPES, start=1):
             figure = self._plot_technology(analysis, technology)
             path = output_path / f"{index:02d}_{technology.lower()}_recovery.png"
-            figure.savefig(path, dpi=150)
+            save_figure_with_spanish_copy(figure, path, dpi=150)
             plt.close(figure)
             figures.append(path)
         return PlantRecoveryResult(output_path, analysis, tuple(figures))

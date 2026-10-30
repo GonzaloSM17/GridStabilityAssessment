@@ -20,6 +20,7 @@ from montecarlo.reports import AnalysisReport
 from montecarlo.study import MonteCarloStudy
 from stability.scenario import ContingencyScenario, EvaluationProfile
 from utils.analysis_logging import configure_analysis_logger
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
 
 
 class MonteCarloWorkbench:
@@ -229,6 +230,15 @@ class MonteCarloWorkbench:
             ),
             controller_output_directory,
             "02_weighted.png",
+        )
+        self.save_figure(
+            self.pipeline.plot_weighted_controllers_log_fn(
+                controller_analysis,
+                study_analysis,
+                self.dynamic_stability_analysis,
+            ),
+            controller_output_directory,
+            "03_weighted_log_fn.png",
         )
         for bus_analysis in study_analysis.bus_analyses:
             self._publish_bus_analysis(bus_analysis, controller_analysis)
@@ -464,7 +474,7 @@ class MonteCarloWorkbench:
         for filename in obsolete_filenames:
             obsolete_path = output_directory / filename
             if obsolete_path.is_file():
-                obsolete_path.unlink()
+                remove_figure_with_spanish_copy(obsolete_path)
         return tuple(
             self.save_figure(figure, output_directory, filename)
             for filename, figure in figures
@@ -531,10 +541,10 @@ class MonteCarloWorkbench:
         return output_directory
 
     def save_figure(self, figure, output_directory: Path, filename: str) -> Path:
-        """Save and release the figure unless interactive display was requested."""
+        """Save English and Spanish presentations, then release the figure."""
         output_path = output_directory / filename
         try:
-            figure.savefig(output_path, dpi=150)
+            save_figure_with_spanish_copy(figure, output_path, dpi=150)
         finally:
             if not self._show_figures:
                 import matplotlib.pyplot as plt

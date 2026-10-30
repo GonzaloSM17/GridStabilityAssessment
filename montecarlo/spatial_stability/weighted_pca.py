@@ -3,6 +3,8 @@ from dataclasses import replace
 from pathlib import Path
 import json
 import numpy as np
+
+from utils.figure_localization import save_figure_with_spanish_copy
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
@@ -175,7 +177,7 @@ def export_weighted_pca(analysis, out, result, composition):
                  "Los pesos modifican los ejes; las etiquetas de estabilidad no entran al PCA")
     path = out/"06_weighted_pca_projection.png"
     try:
-        fig.savefig(path, dpi=170)
+        save_figure_with_spanish_copy(fig, path, dpi=170)
     finally:
         fig.clear()
     lines = [

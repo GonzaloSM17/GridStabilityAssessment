@@ -17,6 +17,7 @@ from stability.power_transfer import (
     spectral_power_spectrum,
 )
 from stability.scenario import EvaluationProfile
+from utils.figure_localization import save_figure_with_spanish_copy
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ class SingleRunHighFrequency:
         analysis = self.analyze()
         figure = self._plot_spectrum(analysis)
         path = output_path / "06_high_frequency_spectrum.png"
-        figure.savefig(path, dpi=150)
+        save_figure_with_spanish_copy(figure, path, dpi=150)
         plt.close(figure)
         return HighFrequencyResult(output_path, analysis, (path,))
 

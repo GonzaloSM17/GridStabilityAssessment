@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score, silhouette_score
@@ -192,7 +194,7 @@ def _export_figures(out, profiles, result, cases):
     def save(fig, name):
         path = out / name
         try:
-            fig.savefig(path, dpi=170)
+            save_figure_with_spanish_copy(fig, path, dpi=170)
         finally:
             fig.clear()
         paths.append(path)
@@ -393,7 +395,10 @@ def export_clustering(analysis, output_directory, *, low_xi_threshold=.7, min_ce
                      "05_pca_groups_and_stability.png", "PCA_DESCRIPTION.md"):
             path = out / name
             if path.is_file():
-                path.unlink()
+                if path.suffix == ".png":
+                    remove_figure_with_spanish_copy(path)
+                else:
+                    path.unlink()
     cases = {c.case_id: c for c in analysis.cases}
     _csv(out / "case_features.csv",
          [dict(case_id=c, **dict(zip(FEATURES, row)))

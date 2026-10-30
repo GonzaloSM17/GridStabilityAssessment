@@ -12,6 +12,7 @@ from stability.angular import (
     AngularCalculation,
 )
 from stability.scenario import ContingencyScenario
+from utils.figure_localization import save_figure_with_spanish_copy
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,7 @@ class MonteCarloAngularStability:
         paths = []
         for filename, figure in figures:
             path = output_path / filename
-            figure.savefig(path, dpi=150)
+            save_figure_with_spanish_copy(figure, path, dpi=150)
             plt.close(figure)
             paths.append(path)
         return AngularStabilityResult(output_path, analysis, tuple(paths))

@@ -9,6 +9,8 @@ from pathlib import Path
 import time
 
 import numpy as np
+
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.dummy import DummyClassifier
@@ -292,7 +294,10 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
         for name in OWN_FILES:
             path = out/name
             if path.is_file():
-                path.unlink()
+                if path.suffix == ".png":
+                    remove_figure_with_spanish_copy(path)
+                else:
+                    path.unlink()
     _csv(out/"excluded_cases.csv", excluded, ["case_id", "reason"])
     input_rows = [dict(basis=basis, case_id=c, status="Unstable" if y[i] else "Stable",
                       **{name:float(v) if np.isfinite(v) else None
@@ -360,7 +365,7 @@ def _export_figures(out, matrices, y, result):
     def save(fig, name):
         path = out/name
         try:
-            fig.savefig(path, dpi=170)
+            save_figure_with_spanish_copy(fig, path, dpi=170)
         finally:
             fig.clear()
         paths.append(path)

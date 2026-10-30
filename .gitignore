@@ -204,6 +204,9 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Local legacy Parquet schema retained outside the active extreme-cases flow.
+extreme_cases/model/*.parquet
+
 # Ruff stuff:
 .ruff_cache/
 

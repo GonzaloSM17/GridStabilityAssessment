@@ -10,6 +10,7 @@ from stability.initialization import (
     InitializationCriteria,
     assess_initialization,
 )
+from utils.figure_localization import save_figure_with_spanish_copy
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ class SingleRunInitialization:
         analysis = self.analyze()
         figure = self._plot(analysis)
         path = output_path / "01_voltage_initialization.png"
-        figure.savefig(path, dpi=150)
+        save_figure_with_spanish_copy(figure, path, dpi=150)
         plt.close(figure)
         return InitializationResult(output_path, analysis, (path,))
 

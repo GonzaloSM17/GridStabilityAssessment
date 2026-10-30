@@ -13,6 +13,7 @@ from data.signals import (
 from stability.plotting import close_y_axis, label_damping_reference_limits
 from stability.power_transfer import TransferRunAssessment, assess_transfer_damping, isolate_mode
 from stability.scenario import EvaluationProfile
+from utils.figure_localization import save_figure_with_spanish_copy
 
 
 @dataclass(frozen=True)
@@ -116,7 +117,7 @@ class SingleRunDampingStability:
         figure_paths = []
         for filename, figure in figures:
             path = output_path / filename
-            figure.savefig(path, dpi=150)
+            save_figure_with_spanish_copy(figure, path, dpi=150)
             plt.close(figure)
             figure_paths.append(path)
         return DampingStabilityResult(output_path, analysis, tuple(figure_paths))

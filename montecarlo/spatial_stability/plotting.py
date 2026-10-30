@@ -10,6 +10,8 @@ import re
 import unicodedata
 from time import monotonic
 
+from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
+
 from .models import SpatialStabilityResult
 from .distributions import PLOT_STATUSES
 
@@ -330,7 +332,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         directory = out/folder_name
         old_unknown_map = directory/"by_stability"/"not_evaluated"/f"{prefix}_mean_map.png"
         if old_unknown_map.is_file():
-            old_unknown_map.unlink()
+            remove_figure_with_spanish_copy(old_unknown_map)
         for status, status_folder in STATUS_DIRECTORIES.items():
             selected_cases, averages, rows = groups[status]
             # Always represent Stable/Unstable, and create an unknown class only when it exists.
@@ -348,11 +350,11 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             if status not in PLOT_STATUSES:
                 old_map = folder/f"{prefix}_mean_map.png"
                 if old_map.is_file():
-                    old_map.unlink()
+                    remove_figure_with_spanish_copy(old_map)
                 continue
             old_map = folder/f"{prefix}_mean_map.png"
             if old_map.is_file():
-                old_map.unlink()
+                remove_figure_with_spanish_copy(old_map)
         figure = _draw_mean_comparison(
             groups["Stable"][1],
             groups["Unstable"][1],
@@ -367,7 +369,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             len(groups["Unstable"][0]),
         )
         path = directory/f"{prefix}_mean_map.png"
-        try: figure.savefig(path,dpi=150)
+        try: save_figure_with_spanish_copy(figure, path, dpi=150)
         finally: plt.close(figure)
         figures.append(path)
     _write_csv(out/"stability_group_summary.csv", summary, list(summary[0]))
@@ -389,7 +391,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             if case.assessment.status not in PLOT_STATUSES:
                 old_map = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
                 if old_map.is_file():
-                    old_map.unlink()
+                    remove_figure_with_spanish_copy(old_map)
         for case in plotted_cases:
             selected = tuple(p for p in points if p.case_id == case.case_id)
             row = next(row for row in case_rows if row["case_id"] == case.case_id)
@@ -399,7 +401,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                            f"Dynamic stability: {case.assessment.status} ({criterion_label})\n"
                            f"MVA-weighted included population = {value:.3f}{units}", bounds,xi_limits,xi_ticks,fn_edges,size_factor)
             path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
-            try: figure.savefig(path,dpi=150)
+            try: save_figure_with_spanish_copy(figure, path, dpi=150)
             finally: plt.close(figure)
             figures.append(path)
             completed_maps += 1

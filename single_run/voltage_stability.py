@@ -8,6 +8,7 @@ from data.run import MonteCarloRun
 from data.signals import Bus, SignalCatalog, order_500_kv_buses_north_to_south
 from stability.scenario import EvaluationProfile
 from stability.voltage import StabilityAssessment, assess_stability
+from utils.figure_localization import save_figure_with_spanish_copy
 
 
 def _round_up_to_nice_number(value: float) -> float:
@@ -190,7 +191,7 @@ class SingleRunVoltageStability:
             )
             for filename, figure in figures:
                 path = output_path / filename
-                figure.savefig(path, dpi=150)
+                save_figure_with_spanish_copy(figure, path, dpi=150)
                 plt.close(figure)
                 figure_paths.append(path)
 

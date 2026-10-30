@@ -13,6 +13,7 @@ from math import isfinite
 import numpy as np
 
 from stability.dynamic_stability import assess_dynamic_stability, assess_monte_carlo_stability
+from utils.figure_localization import save_figure_with_spanish_copy
 from .models import SpatialControllerPoint, SpatialCaseAssessment, SpatialStabilityAnalysis, SpatialSkippedRun
 
 STATUSES = ("Stable", "Unstable", "Not evaluated")
@@ -155,7 +156,7 @@ def export_case_weighted_means(analysis, output_directory):
                    "Cada punto es una corrida; igual peso por caso",fontsize=13)
     path = out/"05_case_weighted_means.png"
     try:
-        figure.savefig(path,dpi=170)
+        save_figure_with_spanish_copy(figure, path, dpi=170)
     finally:
         plt.close(figure)
     metadata = dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,
@@ -198,7 +199,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
     paths=[]
     def save(figure,name):
         path=out/name
-        try:figure.savefig(path,dpi=170)
+        try:save_figure_with_spanish_copy(figure, path, dpi=170)
         finally:plt.close(figure)
         paths.append(path)
     fig,axes=plt.subplots(2,2,figsize=(12,9),layout="constrained")
