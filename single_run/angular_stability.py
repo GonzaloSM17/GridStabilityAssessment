@@ -9,6 +9,7 @@ from data.run import MonteCarloRun
 from stability.angular import (
     ANGULAR_LIMIT_DEGREES,
     ANGULAR_REFERENCE_NOTE,
+    AngularSignalNormalization,
     AngularCalculation,
     AngularMachineInput,
     AngularStabilityAnalysis,
@@ -43,12 +44,19 @@ class AngularStabilityResult:
 class SingleRunAngularStability:
     """Read one run and render the shared H·S weighted angular calculation."""
 
-    def __init__(self, run: MonteCarloRun, scenario: ContingencyScenario, assets: Assets) -> None:
+    def __init__(
+        self,
+        run: MonteCarloRun,
+        scenario: ContingencyScenario,
+        assets: Assets,
+        angular_signal_normalization: AngularSignalNormalization | None = None,
+    ) -> None:
         if run.dataset is None:
             raise ValueError(f"Run {run.run_id} does not contain a Parquet result.")
         self.run = run
         self.scenario = scenario
         self.assets = assets
+        self.angular_signal_normalization = angular_signal_normalization
 
     def analyze(self) -> AngularStabilityAnalysis:
         return self.calculate().analysis
@@ -102,7 +110,12 @@ class SingleRunAngularStability:
             machines.append(
                 AngularMachineInput(machine_name, signal_name, inertia_s, nominal_power_mva)
             )
-            angle_values[machine_name] = data[signal_name].to_list()
+            values = data[signal_name].to_list()
+            angle_values[machine_name] = (
+                self.angular_signal_normalization.normalize(machine_name, values)
+                if self.angular_signal_normalization is not None
+                else values
+            )
         if missing_assets:
             names = ", ".join(sorted(set(missing_assets)))
             raise KeyError(
@@ -398,7 +411,8 @@ class SingleRunAngularStability:
             0.035,
             "Representative machine: "
             f"{reference.reference_machine_name} "
-            f"(initial distance to COI: {reference.initial_distance_to_coi_degrees:.3f}°).",
+            f"({reference.reference_nominal_power_mva:.1f} MVA; "
+            f"initial distance to COI: {reference.initial_distance_to_coi_degrees:.3f}°).",
             ha="center",
             va="bottom",
             fontsize=8.5,

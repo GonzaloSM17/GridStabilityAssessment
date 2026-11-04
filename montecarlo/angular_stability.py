@@ -9,6 +9,7 @@ from single_run.angular_stability import SingleRunAngularStability
 from stability.angular import (
     ANGULAR_LIMIT_DEGREES,
     ANGULAR_REFERENCE_NOTE,
+    AngularSignalNormalization,
     AngularCalculation,
     RepresentativeMachineReferenceCalculation,
 )
@@ -55,6 +56,8 @@ class AngularStudyAnalysis:
     """Angular outcomes for every selected Monte Carlo run."""
 
     run_assessments: tuple[AngularRunAssessment, ...]
+    normalization_name: str | None = None
+    normalization_description: str | None = None
 
     def assessment_for(self, run_id: int) -> AngularRunAssessment:
         for item in self.run_assessments:
@@ -83,10 +86,12 @@ class MonteCarloAngularStability:
         runs: tuple[MonteCarloRun, ...],
         scenario: ContingencyScenario,
         assets: Assets,
+        angular_signal_normalization: AngularSignalNormalization | None = None,
     ) -> None:
         self.runs = tuple(runs)
         self.scenario = scenario
         self.assets = assets
+        self.angular_signal_normalization = angular_signal_normalization
 
     def analyze(self) -> AngularStudyAnalysis:
         """Evaluate every run independently, retaining unavailable evidence."""
@@ -107,6 +112,7 @@ class MonteCarloAngularStability:
                     run,
                     self.scenario,
                     self.assets,
+                    self.angular_signal_normalization,
                 )
                 calculation, representative_reference = adapter.calculate_alternatives()
             except (FileNotFoundError, KeyError, ValueError) as error:
@@ -122,7 +128,19 @@ class MonteCarloAngularStability:
                     representative_reference=representative_reference,
                 )
             )
-        return AngularStudyAnalysis(tuple(assessments))
+        return AngularStudyAnalysis(
+            tuple(assessments),
+            (
+                self.angular_signal_normalization.name
+                if self.angular_signal_normalization is not None
+                else None
+            ),
+            (
+                self.angular_signal_normalization.description
+                if self.angular_signal_normalization is not None
+                else None
+            ),
+        )
 
     def create(self, output_directory: str | Path) -> AngularStabilityResult:
         """Save compact evidence for the run-level angular conclusion."""

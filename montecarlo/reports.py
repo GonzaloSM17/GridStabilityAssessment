@@ -291,6 +291,12 @@ class AnalysisReport:
                 ))
         sheet.append(())
         sheet.append(("Criterion", f"Strictly within ±{ANGULAR_LIMIT_DEGREES:.0f} deg", ANGULAR_REFERENCE_NOTE))
+        if self.angular_stability_analysis.normalization_name is not None:
+            sheet.append((
+                "Input normalization",
+                self.angular_stability_analysis.normalization_name,
+                self.angular_stability_analysis.normalization_description,
+            ))
         self._format_sheet(sheet)
 
     def _write_transfer_modes(self, sheet) -> None:

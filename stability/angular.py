@@ -6,15 +6,61 @@ from typing import Mapping, Sequence
 
 
 ANGULAR_LIMIT_DEGREES = 120.0
+REPRESENTATIVE_MACHINE_MINIMUM_NOMINAL_POWER_MVA = 50.0
 ANGULAR_REFERENCE_NOTE = (
     "Angular excursions are referred to the centre of inertia calculated at every "
     "time step with the H·S weight from Assets. The ±120° lines are the active "
     "angular-separation reference limits."
 )
 REPRESENTATIVE_MACHINE_REFERENCE_NOTE = (
-    "Diagnostic reference only: the machine whose initial rotor angle is closest "
-    "to the H·S-weighted centre of inertia at t=0 is retained as a fixed machine "
+    "Diagnostic reference only: among synchronous machines with nominal power at "
+    "or above 50 MVA, the machine whose initial rotor angle is closest to the "
+    "H·S-weighted centre of inertia at t=0 is retained as a fixed machine "
     "reference. It does not determine the angular-stability criterion."
+)
+
+
+@dataclass(frozen=True)
+class AngularSignalNormalization:
+    """Optional, explicit conversion from published rotor angles to one basis."""
+
+    name: str
+    description: str
+    factors_by_machine_prefix: tuple[tuple[str, float], ...]
+
+    def factor_for_machine(self, machine_name: str) -> float:
+        """Return the declared multiplier for one machine name."""
+        for prefix, factor in self.factors_by_machine_prefix:
+            if machine_name.startswith(prefix):
+                return factor
+        return 1.0
+
+    def normalize(
+        self,
+        machine_name: str,
+        angle_values_degrees: Sequence[float],
+    ) -> tuple[float, ...]:
+        """Unwrap a published angle and convert it to the declared common basis."""
+        import numpy as np
+
+        values = np.asarray(angle_values_degrees, dtype=float)
+        unwrapped = np.rad2deg(np.unwrap(np.deg2rad(values)))
+        return tuple((unwrapped * self.factor_for_machine(machine_name)).tolist())
+
+
+LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION = AngularSignalNormalization(
+    name="legacy_mixed_pole_to_two_pole_equivalent",
+    description=(
+        "Published Teta_1 signals are interpreted as mechanical rotor angles. "
+        "HP_, HE_ and GEO_ machines used four poles and are multiplied by their "
+        "two pole pairs; TER_ machines remain on the two-pole basis."
+    ),
+    factors_by_machine_prefix=(
+        ("HP_", 2.0),
+        ("HE_", 2.0),
+        ("GEO_", 2.0),
+        ("TER_", 1.0),
+    ),
 )
 
 
@@ -118,6 +164,7 @@ class RepresentativeMachineReferenceAnalysis:
 
     reference_machine_name: str
     reference_signal_name: str
+    reference_nominal_power_mva: float
     initial_centre_of_inertia_degrees: float
     reference_initial_angle_degrees: float
     initial_distance_to_coi_degrees: float
@@ -230,8 +277,18 @@ def assess_representative_machine_reference(
     )
     initial_coi = float(np.average(angles[:, 0], weights=weights))
     distances = np.abs(angles[:, 0] - initial_coi)
+    eligible_indices = tuple(
+        index
+        for index, machine in enumerate(machines)
+        if machine.nominal_power_mva >= REPRESENTATIVE_MACHINE_MINIMUM_NOMINAL_POWER_MVA
+    )
+    if not eligible_indices:
+        raise ValueError(
+            "No synchronous machine meets the representative-reference minimum "
+            f"nominal power of {REPRESENTATIVE_MACHINE_MINIMUM_NOMINAL_POWER_MVA:.0f} MVA."
+        )
     reference_index = min(
-        range(len(machines)),
+        eligible_indices,
         key=lambda index: (float(distances[index]), machines[index].machine_name),
     )
     reference_machine = machines[reference_index]
@@ -250,6 +307,7 @@ def assess_representative_machine_reference(
     analysis = RepresentativeMachineReferenceAnalysis(
         reference_machine_name=reference_machine.machine_name,
         reference_signal_name=reference_machine.signal_name,
+        reference_nominal_power_mva=reference_machine.nominal_power_mva,
         initial_centre_of_inertia_degrees=initial_coi,
         reference_initial_angle_degrees=float(reference_angle[0]),
         initial_distance_to_coi_degrees=float(distances[reference_index]),

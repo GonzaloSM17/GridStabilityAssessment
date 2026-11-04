@@ -19,6 +19,7 @@ from montecarlo.context import MonteCarloContext
 from montecarlo.reports import AnalysisReport
 from montecarlo.study import MonteCarloStudy
 from stability.scenario import ContingencyScenario, EvaluationProfile
+from stability.angular import AngularSignalNormalization
 from utils.analysis_logging import configure_analysis_logger
 from utils.figure_localization import remove_figure_with_spanish_copy, save_figure_with_spanish_copy
 
@@ -32,6 +33,7 @@ class MonteCarloWorkbench:
         assets_path: str | Path | None = None,
         scenario: ContingencyScenario | None = None,
         profile: EvaluationProfile | None = None,
+        angular_signal_normalization: AngularSignalNormalization | None = None,
     ) -> None:
         self._output_directory: Path | None = None
         self._show_figures = False
@@ -43,6 +45,7 @@ class MonteCarloWorkbench:
         self.spatial_stability_result = None
         self._run_selection: tuple[int | None, int, int] = (None, 0, 0)
         self._spatial_voltage_scope = "All available 220/500 kV buses"
+        self.angular_signal_normalization = angular_signal_normalization
         self.open_study(context_path, assets_path, scenario, profile)
 
     @property
@@ -205,6 +208,11 @@ class MonteCarloWorkbench:
         logger.info("Active-power transfer analysis completed")
 
         logger.info("Starting angular stability")
+        if self.angular_signal_normalization is not None:
+            logger.info(
+                "Angular signal normalization: %s",
+                self.angular_signal_normalization.name,
+            )
         self.angular_stability_result = self.create_angular_stability()
         logger.info("Angular stability completed")
         self.dynamic_stability_analysis = self.pipeline.analyze_contingency_dynamic_stability(
@@ -334,6 +342,7 @@ class MonteCarloWorkbench:
             tuple(self.pipeline.context.runs),
             self.pipeline.scenario,
             self.study.assets,
+            self.angular_signal_normalization,
         ).create(output)
         unavailable = sum(
             item.status == "Not evaluated"

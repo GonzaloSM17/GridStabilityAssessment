@@ -11,6 +11,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 matplotlib.use("Agg")
 
 from montecarlo.workbench import MonteCarloWorkbench
+from stability.angular import LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
 from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
@@ -18,6 +19,9 @@ if __name__ == "__main__":
     context_path = None
     assets_path = None
     output_path = None
+    # Set this only for the historical study with HP_/HE_/GEO_ four-pole angles.
+    angular_signal_normalization = None
+    # angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
     # Set to a positive integer to analyze only the first ordered runs.
     # Keep None to analyze the whole Monte Carlo study.
     max_runs = 76
@@ -33,7 +37,12 @@ if __name__ == "__main__":
         location="KIMAL_220",
     )
 
-    workbench = MonteCarloWorkbench(context_path, assets_path, scenario)
+    workbench = MonteCarloWorkbench(
+        context_path,
+        assets_path,
+        scenario,
+        angular_signal_normalization=angular_signal_normalization,
+    )
     workbench.select_output_directory(output_path)
     # Save outputs without opening interactive figure windows.
     workbench.analyze(buses=buses, show_figures=False, max_runs=max_runs)
