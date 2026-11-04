@@ -10,6 +10,7 @@ from stability.angular import (
     ANGULAR_LIMIT_DEGREES,
     ANGULAR_REFERENCE_NOTE,
     AngularCalculation,
+    RepresentativeMachineReferenceCalculation,
 )
 from stability.scenario import ContingencyScenario
 from utils.figure_localization import save_figure_with_spanish_copy
@@ -23,6 +24,7 @@ class AngularRunAssessment:
     status: str
     calculation: AngularCalculation | None
     reason: str | None = None
+    representative_reference: RepresentativeMachineReferenceCalculation | None = None
 
     @property
     def critical_machine(self):
@@ -31,6 +33,19 @@ class AngularRunAssessment:
         return max(
             self.calculation.analysis.machines,
             key=lambda machine: machine.maximum_absolute_excursion_degrees,
+            default=None,
+        )
+
+    @property
+    def representative_maximum_excursion_degrees(self) -> float | None:
+        """Return the diagnostic maximum relative to the fixed representative machine."""
+        if self.representative_reference is None:
+            return None
+        return max(
+            (
+                machine.maximum_absolute_excursion_degrees
+                for machine in self.representative_reference.analysis.machines
+            ),
             default=None,
         )
 
@@ -88,11 +103,12 @@ class MonteCarloAngularStability:
                 )
                 continue
             try:
-                calculation = SingleRunAngularStability(
+                adapter = SingleRunAngularStability(
                     run,
                     self.scenario,
                     self.assets,
-                ).calculate()
+                )
+                calculation, representative_reference = adapter.calculate_alternatives()
             except (FileNotFoundError, KeyError, ValueError) as error:
                 assessments.append(
                     AngularRunAssessment(run.run_id, "Not evaluated", None, str(error))
@@ -103,6 +119,7 @@ class MonteCarloAngularStability:
                     run.run_id,
                     "Stable" if calculation.analysis.is_stable else "Unstable",
                     calculation,
+                    representative_reference=representative_reference,
                 )
             )
         return AngularStudyAnalysis(tuple(assessments))
@@ -123,6 +140,22 @@ class MonteCarloAngularStability:
             (
                 "03_angular_instability_by_machine.png",
                 self._plot_instability_by_machine(analysis),
+            ),
+            (
+                "04_representative_machine_excursions_10s.png",
+                self._plot_representative_machine_excursions(
+                    analysis,
+                    end_time_s=10.0,
+                    title="Representative-Machine Angular Excursion by Run — 0–10 s",
+                ),
+            ),
+            (
+                "05_representative_machine_excursions_tmax.png",
+                self._plot_representative_machine_excursions(
+                    analysis,
+                    end_time_s=None,
+                    title="Representative-Machine Angular Excursion by Run — Full Simulation",
+                ),
             ),
         )
         paths = []
@@ -243,6 +276,80 @@ class MonteCarloAngularStability:
         figure.text(0.5, 0.015, "Each point is one unstable run, grouped by its critical machine.", ha="center", va="bottom", fontsize=8)
         figure.subplots_adjust(left=0.08, right=0.97, bottom=0.22, top=0.90)
         return figure
+
+    def _plot_representative_machine_excursions(
+        self,
+        analysis: AngularStudyAnalysis,
+        *,
+        end_time_s: float | None,
+        title: str,
+    ):
+        """Compare diagnostic fixed-reference excursion maxima without relabelling runs."""
+        import matplotlib.pyplot as plt
+
+        figure, axis = plt.subplots(figsize=(13.5, 6.0))
+        colors = {"Stable": "#0072B2", "Unstable": "#D55E00"}
+        for status, color in colors.items():
+            selected = [
+                item
+                for item in analysis.run_assessments
+                if item.status == status and item.representative_reference is not None
+            ]
+            if not selected:
+                continue
+            axis.scatter(
+                [item.run_id for item in selected],
+                [
+                    self._representative_maximum_excursion(item, end_time_s)
+                    for item in selected
+                ],
+                color=color,
+                s=28,
+                alpha=0.80,
+                label=f"Official COI status: {status}",
+            )
+        axis.axhline(
+            ANGULAR_LIMIT_DEGREES,
+            color="#D73027",
+            linestyle="--",
+            linewidth=1.2,
+            label="120 deg visual reference only",
+        )
+        axis.set(
+            xlabel="Monte Carlo run",
+            ylabel="Maximum absolute diagnostic excursion (deg)",
+            title=title,
+        )
+        axis.grid(alpha=0.28)
+        axis.legend(loc="upper left", framealpha=0.92)
+        figure.text(
+            0.5,
+            0.015,
+            "Each run uses the synchronous machine closest to its initial H·S-weighted COI as "
+            "a fixed reference. This is diagnostic only; the dynamic-COI criterion remains official.",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+        figure.subplots_adjust(left=0.08, right=0.97, bottom=0.14, top=0.90)
+        return figure
+
+    @staticmethod
+    def _representative_maximum_excursion(
+        assessment: AngularRunAssessment,
+        end_time_s: float | None,
+    ) -> float:
+        """Return the selected-window maximum across all diagnostic machine curves."""
+        calculation = assessment.representative_reference
+        if calculation is None:
+            raise ValueError("Representative-machine reference is unavailable.")
+        values = (
+            abs(value)
+            for excursion in calculation.excursions
+            for time, value in zip(calculation.time_values, excursion)
+            if end_time_s is None or time <= end_time_s
+        )
+        return max(values, default=0.0)
 
     def _draw_event_context(self, axis) -> None:
         axis.axvspan(

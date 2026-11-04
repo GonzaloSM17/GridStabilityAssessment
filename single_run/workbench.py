@@ -37,7 +37,7 @@ from single_run.voltage_stability import (
     VoltageStabilityAnalysis,
     VoltageStabilityResult,
 )
-from stability.angular import AngularStabilityAnalysis
+from stability.angular import AngularStabilityAnalysis, RepresentativeMachineReferenceAnalysis
 from stability.dynamic_stability import assess_dynamic_stability
 from stability.scenario import (
     ContingencyScenario,
@@ -263,6 +263,7 @@ class SingleRunWorkbench:
             angular.analysis,
             plant_recovery.analysis,
             spatial,
+            angular.representative_reference_analysis,
         )
         logger.info("Analysis report created")
         logger.info("Single-run analysis completed")
@@ -287,6 +288,7 @@ class SingleRunWorkbench:
         angular: AngularStabilityAnalysis,
         plant_recovery: PlantRecoveryAnalysis,
         spatial_stability=None,
+        representative_reference: RepresentativeMachineReferenceAnalysis | None = None,
     ) -> Path:
         """Write the database-style case report at the analysis-output root."""
         return SingleRunReport(
@@ -305,6 +307,7 @@ class SingleRunWorkbench:
                 self._damping_status(damping),
                 "Stable" if angular.is_stable else "Unstable",
             ),
+            representative_reference,
         ).write(self.analysis_output_directory())
 
     @staticmethod

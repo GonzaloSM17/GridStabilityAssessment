@@ -8,7 +8,12 @@ from single_run.initialization import InitializationAnalysis
 from single_run.high_frequency import HighFrequencyAnalysis
 from single_run.voltage_stability import VoltageStabilityAnalysis
 from single_run.plant_recovery import PlantRecoveryAnalysis
-from stability.angular import ANGULAR_REFERENCE_NOTE, AngularStabilityAnalysis
+from stability.angular import (
+    ANGULAR_REFERENCE_NOTE,
+    REPRESENTATIVE_MACHINE_REFERENCE_NOTE,
+    AngularStabilityAnalysis,
+    RepresentativeMachineReferenceAnalysis,
+)
 from stability.dynamic_stability import DynamicStabilityAssessment
 from stability.scenario import EvaluationProfile
 
@@ -16,7 +21,7 @@ from stability.scenario import EvaluationProfile
 class SingleRunReport:
     """Write concise conclusions plus traceable, relational-style details."""
 
-    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, plant_recovery: PlantRecoveryAnalysis, spatial_stability, dynamic: DynamicStabilityAssessment) -> None:
+    def __init__(self, run: MonteCarloRun, profile: EvaluationProfile, initialization: InitializationAnalysis, voltage: VoltageStabilityAnalysis, damping: TransferDampingAnalysis, high_frequency: HighFrequencyAnalysis, angular: AngularStabilityAnalysis, plant_recovery: PlantRecoveryAnalysis, spatial_stability, dynamic: DynamicStabilityAssessment, representative_reference: RepresentativeMachineReferenceAnalysis | None = None) -> None:
         self.run = run
         self.profile = profile
         self.initialization = initialization
@@ -27,6 +32,7 @@ class SingleRunReport:
         self.plant_recovery = plant_recovery
         self.spatial_stability = spatial_stability
         self.dynamic = dynamic
+        self.representative_reference = representative_reference
 
     def write(self, output_directory: str | Path) -> Path:
         """Create the workbook at the root of the run analysis outputs."""
@@ -131,6 +137,15 @@ class SingleRunReport:
             rows += (
                 ("Spatial stability", "Map generation", self.spatial_stability.status, self.spatial_stability.reason),
                 ("Spatial stability", "Generated maps", len(self.spatial_stability.figure_paths), "Spatial metadata and any skip reason are in 06_Spatial_Stability."),
+            )
+        if self.representative_reference is not None:
+            rows += (
+                (
+                    "Angular diagnostic",
+                    "Initial-COI representative machine",
+                    self.representative_reference.reference_machine_name,
+                    REPRESENTATIVE_MACHINE_REFERENCE_NOTE,
+                ),
             )
         for row in rows:
             sheet.append(row)
@@ -249,6 +264,15 @@ class SingleRunReport:
         sheet.append(("Machine", "Rotor-angle signal", "Inertia H [s]", "S [MVA]", "H·S [MVA*s]", "Minimum excursion [deg]", "Maximum excursion [deg]", "Maximum absolute excursion [deg]", "First ±120° violation [s]", "Within ±120°"))
         for machine in self.angular.machines:
             sheet.append((machine.machine_name, machine.signal_name, machine.inertia_s, machine.nominal_power_mva, machine.inertia_weight_mva_s, machine.minimum_excursion_degrees, machine.maximum_excursion_degrees, machine.maximum_absolute_excursion_degrees, machine.first_limit_violation_time_s, machine.is_within_limit))
+        if self.representative_reference is not None:
+            reference = self.representative_reference
+            sheet.append(())
+            sheet.append(("Diagnostic reference", "Reference signal", "Initial COI [deg]", "Reference angle at t=0 [deg]", "Initial distance to COI [deg]"))
+            sheet.append((reference.reference_machine_name, reference.reference_signal_name, reference.initial_centre_of_inertia_degrees, reference.reference_initial_angle_degrees, reference.initial_distance_to_coi_degrees))
+            sheet.append(())
+            sheet.append(("Machine", "Rotor-angle signal", "Minimum diagnostic excursion [deg]", "Maximum diagnostic excursion [deg]", "Maximum absolute diagnostic excursion [deg]", "Assessment role"))
+            for machine in reference.machines:
+                sheet.append((machine.machine_name, machine.signal_name, machine.minimum_excursion_degrees, machine.maximum_excursion_degrees, machine.maximum_absolute_excursion_degrees, "Diagnostic only"))
 
     def _write_plant_recovery(self, sheet) -> None:
         """Write terminal P/Q recovery as a compact relational-style table."""

@@ -1,6 +1,12 @@
 """Manual place for selecting and running one Monte Carlo study analysis."""
 
 import matplotlib
+import sys
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 matplotlib.use("Agg")
 
@@ -14,7 +20,7 @@ if __name__ == "__main__":
     output_path = None
     # Set to a positive integer to analyze only the first ordered runs.
     # Keep None to analyze the whole Monte Carlo study.
-    max_runs = None
+    max_runs = 76
     run_characterization = True
     characterization_repeats = 5
     buses = ("KIMAL_220",)

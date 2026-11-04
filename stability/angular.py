@@ -11,6 +11,11 @@ ANGULAR_REFERENCE_NOTE = (
     "time step with the H·S weight from Assets. The ±120° lines are the active "
     "angular-separation reference limits."
 )
+REPRESENTATIVE_MACHINE_REFERENCE_NOTE = (
+    "Diagnostic reference only: the machine whose initial rotor angle is closest "
+    "to the H·S-weighted centre of inertia at t=0 is retained as a fixed machine "
+    "reference. It does not determine the angular-stability criterion."
+)
 
 
 def angular_excursion_limit(excursions: Sequence[Sequence[float]]) -> float:
@@ -96,12 +101,45 @@ class AngularCalculation:
     excursions: tuple[tuple[float, ...], ...]
 
 
-def assess_angular_stability(
+@dataclass(frozen=True)
+class RepresentativeMachineExcursion:
+    """One diagnostic angular excursion relative to a fixed representative machine."""
+
+    machine_name: str
+    signal_name: str
+    minimum_excursion_degrees: float
+    maximum_excursion_degrees: float
+    maximum_absolute_excursion_degrees: float
+
+
+@dataclass(frozen=True)
+class RepresentativeMachineReferenceAnalysis:
+    """Diagnostic reference selected from the initial H·S-weighted COI angle."""
+
+    reference_machine_name: str
+    reference_signal_name: str
+    initial_centre_of_inertia_degrees: float
+    reference_initial_angle_degrees: float
+    initial_distance_to_coi_degrees: float
+    machines: tuple[RepresentativeMachineExcursion, ...]
+
+
+@dataclass(frozen=True)
+class RepresentativeMachineReferenceCalculation:
+    """Sample-by-sample excursions relative to the selected machine angle."""
+
+    analysis: RepresentativeMachineReferenceAnalysis
+    time_values: tuple[float, ...]
+    reference_angle: tuple[float, ...]
+    excursions: tuple[tuple[float, ...], ...]
+
+
+def _validated_angular_arrays(
     time_values: Sequence[float],
     angle_values_by_machine: Mapping[str, Sequence[float]],
     machines: Sequence[AngularMachineInput],
-) -> AngularCalculation:
-    """Calculate COI and every machine excursion at every supplied time sample."""
+):
+    """Validate common angle inputs and return aligned numeric arrays."""
     import numpy as np
 
     if not machines:
@@ -121,6 +159,22 @@ def assess_angular_stability(
     )
     if angles.shape != (len(machines), len(time)) or not np.all(np.isfinite(angles)):
         raise ValueError("Each machine angle must be finite and cover every time sample.")
+    return time, angles, weights
+
+
+def assess_angular_stability(
+    time_values: Sequence[float],
+    angle_values_by_machine: Mapping[str, Sequence[float]],
+    machines: Sequence[AngularMachineInput],
+) -> AngularCalculation:
+    """Calculate COI and every machine excursion at every supplied time sample."""
+    import numpy as np
+
+    time, angles, weights = _validated_angular_arrays(
+        time_values,
+        angle_values_by_machine,
+        machines,
+    )
     centre_of_inertia = np.average(angles, axis=0, weights=weights)
     excursions = angles - centre_of_inertia
     assessments = []
@@ -153,5 +207,57 @@ def assess_angular_stability(
         analysis=analysis,
         time_values=tuple(time.tolist()),
         centre_of_inertia=tuple(centre_of_inertia.tolist()),
+        excursions=tuple(tuple(excursion.tolist()) for excursion in excursions),
+    )
+
+
+def assess_representative_machine_reference(
+    time_values: Sequence[float],
+    angle_values_by_machine: Mapping[str, Sequence[float]],
+    machines: Sequence[AngularMachineInput],
+) -> RepresentativeMachineReferenceCalculation:
+    """Diagnose excursions relative to the machine nearest the initial COI.
+
+    This intentionally does not apply the ±120° criterion. The dynamic COI
+    calculation remains the sole angular-stability assessment.
+    """
+    import numpy as np
+
+    time, angles, weights = _validated_angular_arrays(
+        time_values,
+        angle_values_by_machine,
+        machines,
+    )
+    initial_coi = float(np.average(angles[:, 0], weights=weights))
+    distances = np.abs(angles[:, 0] - initial_coi)
+    reference_index = min(
+        range(len(machines)),
+        key=lambda index: (float(distances[index]), machines[index].machine_name),
+    )
+    reference_machine = machines[reference_index]
+    reference_angle = angles[reference_index]
+    excursions = angles - reference_angle
+    assessments = tuple(
+        RepresentativeMachineExcursion(
+            machine_name=machine.machine_name,
+            signal_name=machine.signal_name,
+            minimum_excursion_degrees=float(np.min(excursion)),
+            maximum_excursion_degrees=float(np.max(excursion)),
+            maximum_absolute_excursion_degrees=float(np.max(np.abs(excursion))),
+        )
+        for machine, excursion in zip(machines, excursions)
+    )
+    analysis = RepresentativeMachineReferenceAnalysis(
+        reference_machine_name=reference_machine.machine_name,
+        reference_signal_name=reference_machine.signal_name,
+        initial_centre_of_inertia_degrees=initial_coi,
+        reference_initial_angle_degrees=float(reference_angle[0]),
+        initial_distance_to_coi_degrees=float(distances[reference_index]),
+        machines=assessments,
+    )
+    return RepresentativeMachineReferenceCalculation(
+        analysis=analysis,
+        time_values=tuple(time.tolist()),
+        reference_angle=tuple(reference_angle.tolist()),
         excursions=tuple(tuple(excursion.tolist()) for excursion in excursions),
     )

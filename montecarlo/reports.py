@@ -115,6 +115,8 @@ class AnalysisReport:
             "Critical Angular Machine",
             "Max Angular Excursion [deg]",
             "First Angular Violation [s]",
+            "Diagnostic Reference Machine",
+            "Diagnostic Max Excursion [deg]",
             "Spatial Map",
             "Spatial Map Note",
         ))
@@ -154,6 +156,16 @@ class AnalysisReport:
                 (
                     critical_machine.first_limit_violation_time_s
                     if critical_machine is not None
+                    else None
+                ),
+                (
+                    angular.representative_reference.analysis.reference_machine_name
+                    if angular is not None and angular.representative_reference is not None
+                    else None
+                ),
+                (
+                    angular.representative_maximum_excursion_degrees
+                    if angular is not None
                     else None
                 ),
                 spatial_status,
@@ -256,6 +268,26 @@ class AnalysisReport:
                     machine.maximum_absolute_excursion_degrees,
                     machine.first_limit_violation_time_s,
                     None,
+                ))
+        sheet.append(())
+        sheet.append((
+            "Run", "Diagnostic reference machine", "Machine",
+            "Minimum diagnostic excursion [deg]", "Maximum diagnostic excursion [deg]",
+            "Maximum absolute diagnostic excursion [deg]", "Role",
+        ))
+        for run_assessment in self.angular_stability_analysis.run_assessments:
+            reference = run_assessment.representative_reference
+            if reference is None:
+                continue
+            for machine in reference.analysis.machines:
+                sheet.append((
+                    self._run_name(run_assessment.run_id),
+                    reference.analysis.reference_machine_name,
+                    machine.machine_name,
+                    machine.minimum_excursion_degrees,
+                    machine.maximum_excursion_degrees,
+                    machine.maximum_absolute_excursion_degrees,
+                    "Diagnostic only; does not alter official dynamic-COI assessment.",
                 ))
         sheet.append(())
         sheet.append(("Criterion", f"Strictly within ±{ANGULAR_LIMIT_DEGREES:.0f} deg", ANGULAR_REFERENCE_NOTE))

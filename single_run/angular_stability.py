@@ -12,9 +12,12 @@ from stability.angular import (
     AngularCalculation,
     AngularMachineInput,
     AngularStabilityAnalysis,
+    RepresentativeMachineReferenceAnalysis,
+    RepresentativeMachineReferenceCalculation,
     angular_excursion_limit,
     angular_excursion_ticks,
     assess_angular_stability,
+    assess_representative_machine_reference,
 )
 from stability.scenario import ContingencyScenario
 from utils.figure_localization import (
@@ -33,6 +36,7 @@ class AngularStabilityResult:
 
     output_directory: Path
     analysis: AngularStabilityAnalysis
+    representative_reference_analysis: RepresentativeMachineReferenceAnalysis
     figure_paths: tuple[Path, ...]
 
 
@@ -51,6 +55,32 @@ class SingleRunAngularStability:
 
     def calculate(self) -> AngularCalculation:
         """Adapt published signals and Assets properties to the shared calculator."""
+        time_values, angle_values, machines = self._read_angular_inputs()
+        return assess_angular_stability(time_values, angle_values, machines)
+
+    def calculate_representative_machine_reference(
+        self,
+    ) -> RepresentativeMachineReferenceCalculation:
+        """Calculate the diagnostic fixed-machine angular reference."""
+        time_values, angle_values, machines = self._read_angular_inputs()
+        return assess_representative_machine_reference(
+            time_values,
+            angle_values,
+            machines,
+        )
+
+    def calculate_alternatives(
+        self,
+    ) -> tuple[AngularCalculation, RepresentativeMachineReferenceCalculation]:
+        """Read the angle group once and calculate official and diagnostic references."""
+        time_values, angle_values, machines = self._read_angular_inputs()
+        return (
+            assess_angular_stability(time_values, angle_values, machines),
+            assess_representative_machine_reference(time_values, angle_values, machines),
+        )
+
+    def _read_angular_inputs(self):
+        """Read synchronized machine angles and their Assets weights once."""
         self.run.dataset.inspect()
         signal_names = tuple(
             series.name for series in self.run.dataset.series if ROTOR_ANGLE_PATTERN.search(series.name)
@@ -79,7 +109,7 @@ class SingleRunAngularStability:
                 "A centre-of-inertia angle requires H and S for every published "
                 f"machine angle. Missing or invalid Assets entries: {names}"
             )
-        return assess_angular_stability(data["time"].to_list(), angle_values, machines)
+        return data["time"].to_list(), angle_values, machines
 
     def create(self, output_directory: str | Path) -> AngularStabilityResult:
         """Save COI, time-series, overview and machine-excursion evidence."""
@@ -87,7 +117,7 @@ class SingleRunAngularStability:
 
         output_path = Path(output_directory)
         output_path.mkdir(parents=True, exist_ok=True)
-        calculation = self.calculate()
+        calculation, representative = self.calculate_alternatives()
         figures = (
             ("01_centre_of_inertia_angle.png", self._plot_centre_of_inertia(calculation)),
             ("02_machine_angular_excursions.png", self._plot_machine_excursions(calculation)),
@@ -100,6 +130,21 @@ class SingleRunAngularStability:
                 "05_angular_stability_tmax.png",
                 self._plot_angular_stability_at_tmax(calculation),
             ),
+            (
+                "06_machine_angular_excursions_tmax.png",
+                self._plot_machine_excursions_tmax(calculation),
+            ),
+            (
+                "07_representative_machine_excursions.png",
+                self._plot_representative_machine_excursions(representative),
+            ),
+            (
+                "08_representative_machine_excursions_tmax.png",
+                self._plot_representative_machine_excursions(
+                    representative,
+                    end_time_s=self.run.dataset.maximum_time_s(),
+                ),
+            ),
         )
         paths = []
         for filename, figure in figures:
@@ -110,7 +155,12 @@ class SingleRunAngularStability:
         obsolete_path = output_path / "01_centre_of_inertia_angular_excursions.png"
         if obsolete_path.is_file():
             remove_figure_with_spanish_copy(obsolete_path)
-        return AngularStabilityResult(output_path, calculation.analysis, tuple(paths))
+        return AngularStabilityResult(
+            output_path,
+            calculation.analysis,
+            representative.analysis,
+            tuple(paths),
+        )
 
     def _plot_centre_of_inertia(self, calculation: AngularCalculation):
         import matplotlib.pyplot as plt
@@ -292,6 +342,78 @@ class SingleRunAngularStability:
             color="#404040",
         )
         figure.subplots_adjust(left=0.085, right=0.95, bottom=0.09, top=0.91, hspace=0.30)
+        return figure
+
+    def _plot_machine_excursions_tmax(self, calculation: AngularCalculation):
+        """Render the official COI-referenced excursions through available tmax."""
+        import matplotlib.pyplot as plt
+
+        figure, axis = plt.subplots(figsize=(13.5, 6.5))
+        self._draw_machine_excursions(
+            axis,
+            calculation,
+            end_time_s=self.run.dataset.maximum_time_s(),
+        )
+        axis.set_title(
+            "Machine Angular Excursions Relative to the Centre of Inertia — Full Simulation",
+            fontsize=12,
+            fontweight="normal",
+            pad=7,
+        )
+        figure.text(
+            0.5,
+            0.015,
+            ANGULAR_DISCLAIMER,
+            ha="center",
+            va="bottom",
+            fontsize=8.5,
+            color="#404040",
+        )
+        figure.subplots_adjust(left=0.085, right=0.95, bottom=0.12, top=0.90)
+        return figure
+
+    def _plot_representative_machine_excursions(
+        self,
+        calculation: RepresentativeMachineReferenceCalculation,
+        *,
+        end_time_s: float | None = None,
+    ):
+        """Render diagnostic excursions against the initial-COI representative machine."""
+        import matplotlib.pyplot as plt
+        from stability.angular import REPRESENTATIVE_MACHINE_REFERENCE_NOTE
+
+        figure, axis = plt.subplots(figsize=(13.5, 6.5))
+        self._draw_machine_excursions(axis, calculation, end_time_s=end_time_s)
+        time_scope = "Full Simulation" if end_time_s is not None else "0–10 s"
+        axis.set_title(
+            "Machine Angular Excursions Relative to the Initial-COI Representative Machine"
+            f" — {time_scope}",
+            fontsize=12,
+            fontweight="normal",
+            pad=7,
+        )
+        reference = calculation.analysis
+        figure.text(
+            0.5,
+            0.035,
+            "Representative machine: "
+            f"{reference.reference_machine_name} "
+            f"(initial distance to COI: {reference.initial_distance_to_coi_degrees:.3f}°).",
+            ha="center",
+            va="bottom",
+            fontsize=8.5,
+            color="#404040",
+        )
+        figure.text(
+            0.5,
+            0.015,
+            REPRESENTATIVE_MACHINE_REFERENCE_NOTE,
+            ha="center",
+            va="bottom",
+            fontsize=8.0,
+            color="#404040",
+        )
+        figure.subplots_adjust(left=0.085, right=0.95, bottom=0.15, top=0.90)
         return figure
 
     def _draw_machine_excursions(

@@ -1,6 +1,12 @@
 """Manual entry point for deterministic extreme-case analysis."""
 
 import matplotlib
+import sys
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 matplotlib.use("Agg")
 
@@ -22,7 +28,9 @@ if __name__ == "__main__":
         clearance_time_s=1.12,
     )
 
-    workbench = ExtremeCasesWorkbench(root_path, scenario, output_path, assets_path=assets_path)
+    workbench = ExtremeCasesWorkbench(
+        root_path, scenario, output_path, assets_path=assets_path
+    )
     if workbench.assets is None:
         workbench.open_assets()
     result = workbench.analyze()
