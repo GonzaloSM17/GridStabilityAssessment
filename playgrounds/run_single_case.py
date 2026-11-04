@@ -11,6 +11,7 @@ from pathlib import Path
 matplotlib.use("Agg")
 
 from single_run.workbench import SingleRunWorkbench
+from stability.angular import LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
 from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
@@ -27,8 +28,16 @@ if __name__ == "__main__":
     # Select an Assets workbook with emtp_name, MVA, inertia, posX and posY.
     assets_path = None
     output_path = None
+    # Set this only for the historical study with HP_/HE_/GEO_ four-pole angles.
+    # angular_signal_normalization = None
+    angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
 
-    workbench = SingleRunWorkbench(run_path, scenario, assets_path)
+    workbench = SingleRunWorkbench(
+        run_path,
+        scenario,
+        assets_path,
+        angular_signal_normalization,
+    )
     if workbench.assets is None:
         workbench.open_assets()
     workbench.select_output_directory(output_path)

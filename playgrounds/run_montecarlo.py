@@ -20,11 +20,11 @@ if __name__ == "__main__":
     assets_path = None
     output_path = None
     # Set this only for the historical study with HP_/HE_/GEO_ four-pole angles.
-    angular_signal_normalization = None
-    # angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
+    # angular_signal_normalization = None
+    angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
     # Set to a positive integer to analyze only the first ordered runs.
     # Keep None to analyze the whole Monte Carlo study.
-    max_runs = 76
+    max_runs = 500
     run_characterization = True
     characterization_repeats = 5
     buses = ("KIMAL_220",)

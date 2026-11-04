@@ -37,7 +37,11 @@ from single_run.voltage_stability import (
     VoltageStabilityAnalysis,
     VoltageStabilityResult,
 )
-from stability.angular import AngularStabilityAnalysis, RepresentativeMachineReferenceAnalysis
+from stability.angular import (
+    AngularSignalNormalization,
+    AngularStabilityAnalysis,
+    RepresentativeMachineReferenceAnalysis,
+)
 from stability.dynamic_stability import assess_dynamic_stability
 from stability.scenario import (
     ContingencyScenario,
@@ -83,6 +87,7 @@ class SingleRunWorkbench:
         run_path: str | Path | None = None,
         scenario: ContingencyScenario | None = None,
         assets_path: str | Path | None = None,
+        angular_signal_normalization: AngularSignalNormalization | None = None,
     ) -> None:
         self._output_directory: Path | None = None
         self._logger = None
@@ -90,6 +95,7 @@ class SingleRunWorkbench:
         self.profile = EvaluationProfile.for_scenario(self.scenario)
         self.run = self.open_run(run_path)
         self.assets = Assets(assets_path) if assets_path is not None else None
+        self.angular_signal_normalization = angular_signal_normalization
 
     def open_run(self, run_path: str | Path | None = None) -> MonteCarloRun:
         """Open an explicit run directory or select one through Tk."""
@@ -126,7 +132,12 @@ class SingleRunWorkbench:
         """Create the fixed system-wide overview under ``00_General``."""
         output_directory = self.analysis_output_directory() / "00_General"
         angular_calculation = (
-            SingleRunAngularStability(self.run, self.scenario, self.assets).calculate()
+            SingleRunAngularStability(
+                self.run,
+                self.scenario,
+                self.assets,
+                self.angular_signal_normalization,
+            ).calculate()
             if self.assets is not None
             else None
         )
@@ -171,9 +182,12 @@ class SingleRunWorkbench:
                 "'Inertia [s]'. Provide assets_path when creating the workbench."
             )
         output_directory = self.analysis_output_directory() / "04_Angular_Stability"
-        return SingleRunAngularStability(self.run, self.scenario, self.assets).create(
-            output_directory
-        )
+        return SingleRunAngularStability(
+            self.run,
+            self.scenario,
+            self.assets,
+            self.angular_signal_normalization,
+        ).create(output_directory)
 
     def open_assets(self, assets_path: str | Path | None = None) -> Assets:
         """Open explicit Assets or use the existing workbench Excel picker."""

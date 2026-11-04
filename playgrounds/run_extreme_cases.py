@@ -11,6 +11,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 matplotlib.use("Agg")
 
 from extreme_cases.workbench import ExtremeCasesWorkbench
+from stability.angular import LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
 from stability.scenario import ContingencyScenario
 
 if __name__ == "__main__":
@@ -20,6 +21,9 @@ if __name__ == "__main__":
     # Set a workbook path, or keep None to choose it through Tk. Assets are
     # required for centre-of-inertia angular stability.
     assets_path = None
+    # Set this only when the extreme cases use the historical mixed-pole base.
+    # angular_signal_normalization = None
+    angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
     scenario = ContingencyScenario(
         name="CC-2PH-G severity 4",
         severity=4,
@@ -29,7 +33,11 @@ if __name__ == "__main__":
     )
 
     workbench = ExtremeCasesWorkbench(
-        root_path, scenario, output_path, assets_path=assets_path
+        root_path,
+        scenario,
+        output_path,
+        assets_path=assets_path,
+        angular_signal_normalization=angular_signal_normalization,
     )
     if workbench.assets is None:
         workbench.open_assets()

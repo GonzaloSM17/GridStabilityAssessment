@@ -19,6 +19,7 @@ from montecarlo.batch_analysis import (
     WeightedControllerPoint,
 )
 from montecarlo.angular_stability import MonteCarloAngularStability
+from stability.angular import AngularSignalNormalization
 from stability.scenario import (
     ContingencyScenario,
     DEFAULT_CONTINGENCY_SCENARIO,
@@ -58,6 +59,7 @@ class ExtremeCasesWorkbench:
         output_directory: str | Path | None = None,
         signal_index_path: str | Path | None = None,
         assets_path: str | Path | None = None,
+        angular_signal_normalization: AngularSignalNormalization | None = None,
     ) -> None:
         self.context = ExtremeCasesContext(root_path)
         self.scenario = scenario or DEFAULT_CONTINGENCY_SCENARIO
@@ -74,6 +76,7 @@ class ExtremeCasesWorkbench:
         )
         self._logger = None
         self.assets = Assets(assets_path) if assets_path is not None else None
+        self.angular_signal_normalization = angular_signal_normalization
 
     @property
     def output_directory(self) -> Path:
@@ -152,7 +155,10 @@ class ExtremeCasesWorkbench:
         angular_result = None
         if self.assets is not None:
             angular_result = MonteCarloAngularStability(
-                tuple(runs), self.scenario, self.assets
+                tuple(runs),
+                self.scenario,
+                self.assets,
+                self.angular_signal_normalization,
             ).create(self.output_directory / "04_Angular_Stability")
         dynamic_stability_analysis = pipeline.analyze_contingency_dynamic_stability(
             study_analysis,
