@@ -271,12 +271,13 @@ def _translate(text: str) -> str:
 
 
 def save_figure_with_spanish_copy(figure, path: str | Path, *, dpi: int) -> tuple[Path, Path]:
-    """Save the original image and a localized sibling without changing the figure.
+    """Save framed original and localized sibling PNG figures.
 
     Only Matplotlib text artists are temporarily translated.  Numerical data,
-    traces, colours, limits, names of electrical assets and the original PNG
-    remain untouched.
+    traces, colours, limits and names of electrical assets remain untouched.
+    A subtle outer frame is applied consistently to both presentation copies.
     """
+    from matplotlib.patches import Rectangle
     from matplotlib.text import Text
 
     output_path = Path(path)
@@ -284,18 +285,33 @@ def save_figure_with_spanish_copy(figure, path: str | Path, *, dpi: int) -> tupl
     output_path.unlink(missing_ok=True)
     spanish_path = spanish_copy_path(output_path)
     spanish_path.unlink(missing_ok=True)
-    figure.savefig(output_path, dpi=dpi)
-
-    originals: list[tuple[Text, str]] = []
-    for artist in figure.findobj(match=lambda item: isinstance(item, Text)):
-        original = artist.get_text()
-        translated = _translate(original)
-        if translated != original:
-            originals.append((artist, original))
-            artist.set_text(translated)
+    frame = Rectangle(
+        (0.004, 0.004),
+        0.992,
+        0.992,
+        transform=figure.transFigure,
+        fill=False,
+        edgecolor="#263238",
+        linewidth=0.9,
+        zorder=10_000,
+        clip_on=False,
+    )
+    figure.add_artist(frame)
     try:
-        figure.savefig(spanish_path, dpi=dpi)
+        figure.savefig(output_path, dpi=dpi)
+
+        originals: list[tuple[Text, str]] = []
+        for artist in figure.findobj(match=lambda item: isinstance(item, Text)):
+            original = artist.get_text()
+            translated = _translate(original)
+            if translated != original:
+                originals.append((artist, original))
+                artist.set_text(translated)
+        try:
+            figure.savefig(spanish_path, dpi=dpi)
+        finally:
+            for artist, original in originals:
+                artist.set_text(original)
     finally:
-        for artist, original in originals:
-            artist.set_text(original)
+        frame.remove()
     return output_path, spanish_path
