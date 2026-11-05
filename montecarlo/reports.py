@@ -46,6 +46,7 @@ class AnalysisReport:
         workbook = Workbook()
         summary_sheet = workbook.active
         summary_sheet.title = "Summary"
+        compliance_summary_sheet = workbook.create_sheet("Compliance Summary", 0)
         initialization_sheet = workbook.create_sheet("Initialization")
         stability_sheet = workbook.create_sheet("Voltage Compliance")
         definitions_sheet = workbook.create_sheet("Definitions")
@@ -62,6 +63,7 @@ class AnalysisReport:
         if self.spatial_stability is not None:
             spatial_sheet = workbook.create_sheet("Spatial Compliance")
 
+        self._write_compliance_summary(compliance_summary_sheet)
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
         self._write_stability(stability_sheet)
@@ -80,6 +82,7 @@ class AnalysisReport:
             self._write_spatial_stability(spatial_sheet)
         workbook.save(output_path)
         workbook.close()
+        self._write_grid_code_compliance_pie(output_path.parent)
         return output_path
 
     def _write_scenario(self, sheet) -> None:
@@ -184,6 +187,186 @@ class AnalysisReport:
                 spatial_note,
             ))
         self._format_sheet(sheet)
+
+    def _write_compliance_summary(self, sheet) -> None:
+        """Write the executive per-criterion Grid Code compliance summary."""
+        run_ids = self.study_analysis.run_ids
+        total_runs = len(run_ids)
+        sheet.append(("Criterion", "Classification", "Number of runs", "Percentage"))
+        if not total_runs:
+            self._format_sheet(sheet)
+            return
+
+        categories = (
+            (
+                "Initialization",
+                tuple(
+                    self._initialization_summary_status(run_id)
+                    for run_id in run_ids
+                ),
+                ("Well initialized", "Initialization warning", "Not evaluated"),
+            ),
+            (
+                "Voltage Grid Code compliance",
+                tuple(self._voltage_grid_code_status(run_id) for run_id in run_ids),
+                ("Compliant", "Non-compliant", "Not evaluated"),
+            ),
+            (
+                "Transfer modal damping",
+                tuple(
+                    self._damping_summary_classification(run_id)
+                    for run_id in run_ids
+                ),
+                (
+                    "Compliant — Damped (xi >= 5%)",
+                    "Non-compliant — Damped under (0 < xi < 5%)",
+                    "Non-compliant — Growing",
+                    "Not evaluated",
+                ),
+            ),
+            (
+                "Angular separation",
+                tuple(self._angular_summary_classification(run_id) for run_id in run_ids),
+                (
+                    "Compliant — Within angular limit",
+                    "Non-compliant — Exceeds angular limit",
+                    "Not evaluated",
+                ),
+            ),
+            (
+                "Overall Grid Code compliance",
+                tuple(self._grid_code_status_for_run(run_id) for run_id in run_ids),
+                ("Compliant", "Non-compliant", "Not evaluated"),
+            ),
+        )
+        for criterion, statuses, order in categories:
+            for classification in order:
+                count = statuses.count(classification)
+                sheet.append((criterion, classification, count, count / total_runs))
+        sheet.append(("Study", "Total selected runs", total_runs, 1.0))
+        self._format_sheet(sheet)
+        for cell in sheet["D"][1:]:
+            cell.number_format = "0.0%"
+
+    def _initialization_summary_status(self, run_id: int) -> str:
+        """Consolidate initialization across the selected voltage buses."""
+        initialized = []
+        for bus_analysis in self.study_analysis.bus_analyses:
+            result = next(
+                (
+                    item
+                    for item in bus_analysis.signal_analysis.run_results
+                    if item.run_id == run_id
+                ),
+                None,
+            )
+            if result is None:
+                return "Not evaluated"
+            initialized.append(result.initialization.is_well_initialized)
+        return "Well initialized" if all(initialized) else "Initialization warning"
+
+    def _damping_summary_classification(self, run_id: int) -> str:
+        """Express transfer modal damping using compliance-oriented categories."""
+        return {
+            "Damped": "Compliant — Damped (xi >= 5%)",
+            "Damped under": "Non-compliant — Damped under (0 < xi < 5%)",
+            "Growing": "Non-compliant — Growing",
+        }.get(self._transfer_damping_summary_for_run(run_id).status, "Not evaluated")
+
+    def _angular_summary_classification(self, run_id: int) -> str:
+        """Express the local angular limit as a compliance category."""
+        if self.angular_stability_analysis is None:
+            return "Not evaluated"
+        status = self.angular_stability_analysis.status_for_run(run_id)
+        return {
+            "Stable": "Compliant — Within angular limit",
+            "Unstable": "Non-compliant — Exceeds angular limit",
+        }.get(status, "Not evaluated")
+
+    def _grid_code_status_for_run(self, run_id: int) -> str:
+        """Return the consolidated Grid Code status or its explicit absence."""
+        if self.dynamic_stability_analysis is None:
+            return "Not evaluated"
+        return self.dynamic_stability_analysis.assessment_for(run_id).grid_code_status
+
+    def _write_grid_code_compliance_pie(self, output_directory: Path) -> None:
+        """Save a root-level distribution figure beside the Excel report."""
+        import matplotlib.pyplot as plt
+
+        from utils.figure_localization import save_figure_with_spanish_copy
+
+        statuses = tuple(
+            self._grid_code_status_for_run(run_id)
+            for run_id in self.study_analysis.run_ids
+        )
+        order = ("Compliant", "Non-compliant", "Not evaluated")
+        counts = tuple(statuses.count(status) for status in order)
+        visible = tuple(
+            (status, count)
+            for status, count in zip(order, counts)
+            if count
+        )
+        figure, axis = plt.subplots(figsize=(8.4, 6.3))
+        if not visible:
+            axis.text(0.5, 0.5, "No runs available.", ha="center", va="center")
+            axis.set_axis_off()
+        else:
+            labels, values = zip(*visible)
+            colors = {
+                "Compliant": "#2F6FC0",
+                "Non-compliant": "#F28E2B",
+                "Not evaluated": "#9E9E9E",
+            }
+            total = sum(values)
+
+            def percentage_label(percentage: float) -> str:
+                count = round(percentage * total / 100.0)
+                return f"{count}\n({percentage:.1f}%)"
+
+            wedges, _, labels_on_wedges = axis.pie(
+                values,
+                colors=tuple(colors[label] for label in labels),
+                startangle=90,
+                counterclock=False,
+                autopct=percentage_label,
+                wedgeprops={"edgecolor": "white", "linewidth": 0.8},
+            )
+            for label in labels_on_wedges:
+                label.set_color("white")
+                label.set_fontweight("bold")
+                label.set_fontsize(9)
+            axis.legend(
+                wedges,
+                labels,
+                loc="lower center",
+                bbox_to_anchor=(0.5, -0.08),
+                ncol=len(labels),
+                frameon=False,
+            )
+            axis.set_title(
+                "Grid Code compliance distribution",
+                fontsize=13,
+                fontweight="normal",
+                pad=12,
+            )
+            figure.text(
+                0.5,
+                0.02,
+                f"Selected Monte Carlo runs: {total}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#404040",
+            )
+        figure.subplots_adjust(bottom=0.16, top=0.90)
+        try:
+            save_figure_with_spanish_copy(
+                figure,
+                output_directory / "grid_code_compliance_distribution.png",
+                dpi=150,
+            )
+        finally:
+            plt.close(figure)
 
     def _voltage_grid_code_status(self, run_id: int) -> str:
         """Translate the selected-bus voltage assessment to compliance wording."""

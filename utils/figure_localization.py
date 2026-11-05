@@ -142,6 +142,8 @@ _SPANISH_REPLACEMENTS = (
     ("Mean PLL damping ratio by Grid Code compliance class", "Razón media de amortiguamiento PLL por clase de cumplimiento NT"),
     ("Mean PLL natural-frequency band by Grid Code compliance class", "Banda media de frecuencia natural PLL por clase de cumplimiento NT"),
     ("Grid Code compliance", "Cumplimiento NT"),
+    ("Grid Code compliance distribution", "Distribución de cumplimiento NT"),
+    ("Selected Monte Carlo runs", "Casos Monte Carlo seleccionados"),
     ("Within angular limit", "Dentro del límite angular"),
     ("Exceeds angular limit", "Supera el límite angular"),
     ("Per-unit mean", "Media por unidad"),
