@@ -15,7 +15,7 @@ class StabilityAssessmentTests(unittest.TestCase):
     def assess(self, voltage):
         return assess_stability(self.time, voltage, self.criteria)
 
-    def test_response_areas_partition_the_unified_event_response(self):
+    def test_idd_covers_the_full_relative_evaluation_window(self):
         voltage = [1.0] * len(self.time)
         for index, time in enumerate(self.time):
             if 1.0 <= time <= 1.12:
@@ -27,11 +27,49 @@ class StabilityAssessmentTests(unittest.TestCase):
 
         self.assertAlmostEqual(result.fault_on_area_pu_s, 0.012, places=8)
         self.assertAlmostEqual(result.recovery_area_pu_s, 0.01764, places=8)
-        self.assertAlmostEqual(
-            result.unified_response_area_pu_s,
+        self.assertGreater(
+            result.idd_area_pu_s,
             result.fault_on_area_pu_s + result.recovery_area_pu_s,
-            places=8,
         )
+        self.assertAlmostEqual(result.idd_area_pu_s, 0.02965, places=8)
+
+    def test_idd_window_moves_with_fault_time(self):
+        standard_voltage = [1.0] * len(self.time)
+        shifted_time = [index / 1000 for index in range(6001)]
+        shifted_voltage = [1.0] * len(shifted_time)
+        for values, times, fault_time in (
+            (standard_voltage, self.time, 1.0),
+            (shifted_voltage, shifted_time, 2.0),
+        ):
+            for index, time in enumerate(times):
+                relative_time = time - fault_time
+                if 0.0 <= relative_time <= 0.12:
+                    values[index] = 0.90
+                elif 0.12 < relative_time <= 1.0:
+                    values[index] = 0.98
+
+        standard = self.assess(standard_voltage)
+        shifted = assess_stability(
+            shifted_time,
+            shifted_voltage,
+            StabilityCriteria(
+                fault_time_s=2.0,
+                clearance_time_s=2.12,
+                response_end_time_s=3.0,
+            ),
+        )
+        self.assertAlmostEqual(standard.idd_area_pu_s, shifted.idd_area_pu_s)
+
+    def test_idd_requires_the_complete_evaluation_window(self):
+        short_time = [index / 1000 for index in range(2111)]
+        criteria = StabilityCriteria(
+            minimum_simulation_end_time_s=2.11,
+            minimum_final_reference_start_time_s=0.0,
+            final_reference_duration_s=0.1,
+            final_settlement_duration_s=0.1,
+        )
+        with self.assertRaisesRegex(ValueError, "IDD evaluation endpoint"):
+            assess_stability(short_time, [1.0] * len(short_time), criteria)
 
     def test_low_voltage_duration_accumulates_separate_intervals(self):
         voltage = [1.0] * len(self.time)

@@ -567,6 +567,7 @@ class MonteCarloWorkbench:
         output_directory: Path,
     ) -> None:
         """Publish controller indicators derived from the selected voltage analysis."""
+        remove_figure_with_spanish_copy(output_directory / "08_unified_response.png")
         figures = (
             (
                 "06_fault_on.png",
@@ -583,8 +584,8 @@ class MonteCarloWorkbench:
                 ),
             ),
             (
-                "08_unified_response.png",
-                self.pipeline.plot_unified_response_area_vs_weighted_controllers(
+                "08_idd.png",
+                self.pipeline.plot_idd_area_vs_weighted_controllers(
                     controller_analysis,
                     voltage_analysis,
                 ),

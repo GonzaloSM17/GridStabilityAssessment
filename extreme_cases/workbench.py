@@ -248,7 +248,10 @@ class ExtremeCasesWorkbench:
         return tuple(self._save_figure(figure, directory, filename) for filename, figure in figures)
 
     def _publish_kimal_figures(self, pipeline, controllers, analysis) -> tuple[Path, ...]:
+        from utils.figure_localization import remove_figure_with_spanish_copy
+
         directory = self.output_directory / "02_KIMAL220"
+        remove_figure_with_spanish_copy(directory / "08_unified_response.png")
         figures = [
             ("01_initialization.png", pipeline.plot_initialization(analysis)),
             ("02_voltage.png", pipeline.plot_voltage_stability(analysis)),
@@ -257,7 +260,7 @@ class ExtremeCasesWorkbench:
             ("05_frequency.png", pipeline.plot_frequency_by_voltage_stability(analysis)),
             ("06_fault_on.png", pipeline.plot_fault_on_area_vs_weighted_controllers(controllers, analysis)),
             ("07_recovery.png", pipeline.plot_recovery_area_vs_weighted_controllers(controllers, analysis)),
-            ("08_unified_response.png", pipeline.plot_unified_response_area_vs_weighted_controllers(controllers, analysis)),
+            ("08_idd.png", pipeline.plot_idd_area_vs_weighted_controllers(controllers, analysis)),
             ("09_below_070.png", pipeline.plot_crisis_decision_vs_weighted_controllers(controllers, analysis)),
             ("10_below_080.png", pipeline.plot_low_voltage_duration_vs_weighted_controllers(controllers, analysis)),
         ]

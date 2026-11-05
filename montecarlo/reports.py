@@ -535,7 +535,9 @@ class AnalysisReport:
                 "Final Settlement Status",
                 "Fault-on Area [pu*s]",
                 "Recovery Area [pu*s]",
-                "Unified Response Area [pu*s]",
+                "IDD Area [pu*s]",
+                "IDD Window End [s]",
+                "IDD Grid Code Limit [pu*s]",
                 "Final Error [%]",
                 "Final Error Limit [%]",
                 "Final Range [%]",
@@ -582,7 +584,13 @@ class AnalysisReport:
                         self._pass_fail(stability.is_settled),
                         stability.fault_on_area_pu_s,
                         stability.recovery_area_pu_s,
-                        stability.unified_response_area_pu_s,
+                        stability.idd_area_pu_s,
+                        stability.criteria.idd_end_time_s,
+                        (
+                            stability.criteria.idd_grid_code_limit_pu_s
+                            if stability.criteria.idd_grid_code_limit_pu_s is not None
+                            else "Not applicable"
+                        ),
                         stability.final_settlement_peak_absolute_relative_error * 100,
                         stability.criteria.maximum_final_absolute_relative_error * 100,
                         stability.final_settlement_peak_to_peak_relative_range * 100,
@@ -605,6 +613,17 @@ class AnalysisReport:
             ("Voltage", "Fault time [s]", stability.fault_time_s),
             ("Voltage", "Clearance time [s]", stability.clearance_time_s),
             ("Voltage", "Response end time [s]", stability.response_end_time_s),
+            ("Voltage", "IDD evaluation duration after fault [s]", stability.idd_evaluation_duration_s),
+            ("Voltage", "IDD evaluation end time [s]", stability.idd_end_time_s),
+            (
+                "Voltage",
+                "IDD Grid Code limit [pu*s]",
+                (
+                    stability.idd_grid_code_limit_pu_s
+                    if stability.idd_grid_code_limit_pu_s is not None
+                    else "Not applicable — no active limit for this scenario"
+                ),
+            ),
             ("Voltage", "0.70 pu crisis threshold [pu]", stability.crisis_voltage_threshold_pu),
             ("Voltage", "0.70 pu deadline after clearance [s]", stability.post_clearance_grace_period_s),
             ("Voltage", "Low-voltage threshold [pu]", stability.low_voltage_threshold_pu),

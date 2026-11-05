@@ -158,10 +158,10 @@ class SingleRunReport:
             sheet.append((item.bus.name, item.voltage_level_kv, value.reference_value, value.fast_relative_error_percentile_99 * 100, value.fast_rms_relative_error * 100, "Well initialized" if value.is_well_initialized else "Warning", ", ".join(value.rejection_reasons) or None))
 
     def _write_voltage(self, sheet) -> None:
-        sheet.append(("Bus", "Voltage level [kV]", "Assessment", "0.70 pu compliant", "0.70 pu event", "0.70 pu decision time [s]", "0.70 pu duration [s]", "Below 0.80 pu duration [s]", "0.80 pu compliant", "Settlement compliant", "Final peak error [%]", "Final range [%]", "Fault-on area [pu*s]", "Recovery area [pu*s]", "Unified response area [pu*s]"))
+        sheet.append(("Bus", "Voltage level [kV]", "Assessment", "0.70 pu compliant", "0.70 pu event", "0.70 pu decision time [s]", "0.70 pu duration [s]", "Below 0.80 pu duration [s]", "0.80 pu compliant", "Settlement compliant", "Final peak error [%]", "Final range [%]", "Fault-on area [pu*s]", "Recovery area [pu*s]", "IDD area [pu*s]", "IDD window end [s]", "IDD Grid Code limit [pu*s]"))
         for item in self.voltage.assessments:
             value = item.assessment
-            sheet.append((item.bus.name, item.voltage_level_kv, "Compliant" if value.is_stable else "Non-compliant", value.is_crisis_voltage_compliant, value.crisis_decision_event, value.crisis_decision_time_s, value.crisis_decision_duration_s, value.cumulative_low_voltage_duration_s, value.is_low_voltage_duration_compliant, value.is_settled, value.final_settlement_peak_absolute_relative_error * 100, value.final_settlement_peak_to_peak_relative_range * 100, value.fault_on_area_pu_s, value.recovery_area_pu_s, value.unified_response_area_pu_s))
+            sheet.append((item.bus.name, item.voltage_level_kv, "Compliant" if value.is_stable else "Non-compliant", value.is_crisis_voltage_compliant, value.crisis_decision_event, value.crisis_decision_time_s, value.crisis_decision_duration_s, value.cumulative_low_voltage_duration_s, value.is_low_voltage_duration_compliant, value.is_settled, value.final_settlement_peak_absolute_relative_error * 100, value.final_settlement_peak_to_peak_relative_range * 100, value.fault_on_area_pu_s, value.recovery_area_pu_s, value.idd_area_pu_s, value.criteria.idd_end_time_s, value.criteria.idd_grid_code_limit_pu_s if value.criteria.idd_grid_code_limit_pu_s is not None else "Not applicable"))
 
     @staticmethod
     def _grid_code_component_status(status: str | None) -> str:
@@ -358,6 +358,14 @@ class SingleRunReport:
             ("Voltage", "Recovery deadline after clearance", voltage.post_clearance_grace_period_s, "s"),
             ("Voltage", "Low-voltage threshold", voltage.low_voltage_threshold_pu, "pu"),
             ("Voltage", "Maximum cumulative time below 0.80 pu", voltage.maximum_cumulative_low_voltage_duration_s, "s"),
+            ("Voltage", "IDD evaluation duration after fault", voltage.idd_evaluation_duration_s, "s"),
+            ("Voltage", "IDD evaluation end", voltage.idd_end_time_s, "s"),
+            (
+                "Voltage",
+                "IDD Grid Code limit",
+                voltage.idd_grid_code_limit_pu_s if voltage.idd_grid_code_limit_pu_s is not None else "Not applicable",
+                "pu*s; no active limit for the current severity-4 scenario",
+            ),
             ("Voltage", "Settlement peak-error limit", voltage.maximum_final_absolute_relative_error * 100, "%"),
             ("Voltage", "Settlement range limit", voltage.maximum_final_peak_to_peak_relative_range * 100, "%"),
             ("Damping", "EM frequency band", f"{damping.mode_minimum_frequency_hz:.1f}–{damping.mode_maximum_frequency_hz:.1f}", "Hz"),

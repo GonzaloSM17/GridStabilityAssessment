@@ -10,16 +10,17 @@ from typing import Sequence
 class StabilityCriteria:
     """Voltage recovery limits and response indicators for one contingency.
 
-    Response indicators cover fault-to-clearance, clearance-to-recovery, and
-    the complete fault-to-recovery interval. Settlement uses the final
-    one-second tail after a sufficiently long simulation.
-    The IDD follows NTSyCS Anexo Técnico art. 3-10: it integrates the absolute
-    deviation from the pre-fault voltage during the fault transient.
+    Response indicators cover fault-to-clearance and clearance-to-recovery.
+    Settlement uses the final one-second tail after a sufficiently long
+    simulation. The IDD integrates the absolute voltage deviation from the
+    pre-fault reference in an evaluation window relative to fault inception.
     """
 
     fault_time_s: float = 1.0
     clearance_time_s: float = 1.12
     response_end_time_s: float = 2.0
+    idd_evaluation_duration_s: float = 1.12
+    idd_grid_code_limit_pu_s: float | None = None
     final_reference_duration_s: float = 1.0
     final_settlement_duration_s: float = 1.0
     minimum_final_reference_start_time_s: float = 4.0
@@ -32,6 +33,11 @@ class StabilityCriteria:
     maximum_cumulative_low_voltage_duration_s: float = 1.0
     low_voltage_no_reentry_after_fault_s: float = 1.0
 
+    @property
+    def idd_end_time_s(self) -> float:
+        """Return the scenario-relative end of the IDD evaluation window."""
+        return self.fault_time_s + self.idd_evaluation_duration_s
+
 
 @dataclass(frozen=True)
 class StabilityAssessment:
@@ -40,7 +46,7 @@ class StabilityAssessment:
     pre_fault_reference_value: float
     fault_on_area_pu_s: float
     recovery_area_pu_s: float
-    unified_response_area_pu_s: float
+    idd_area_pu_s: float
     final_reference_value: float
     final_settlement_peak_absolute_relative_error: float
     final_settlement_peak_to_peak_relative_range: float
@@ -207,12 +213,19 @@ def assess_stability(
     criteria: StabilityCriteria | None = None,
     pre_fault_reference_value: float | None = None,
 ) -> StabilityAssessment:
-    """Assess three event areas, voltage recovery, and final settlement."""
+    """Assess voltage indicators, recovery criteria, and final settlement."""
     criteria = criteria or StabilityCriteria()
     if criteria.fault_time_s < 0 or criteria.clearance_time_s <= criteria.fault_time_s:
         raise ValueError("The fault-on interval must have positive duration.")
     if criteria.response_end_time_s <= criteria.clearance_time_s:
         raise ValueError("The recovery interval must have positive duration.")
+    if criteria.idd_evaluation_duration_s <= 0:
+        raise ValueError("The IDD evaluation duration must be positive.")
+    if (
+        criteria.idd_grid_code_limit_pu_s is not None
+        and criteria.idd_grid_code_limit_pu_s <= 0
+    ):
+        raise ValueError("The optional IDD Grid Code limit must be positive.")
     if (
         criteria.final_reference_duration_s <= 0
         or criteria.final_settlement_duration_s <= 0
@@ -270,6 +283,8 @@ def assess_stability(
     )
     if end_time_s < criteria.clearance_time_s:
         raise ValueError("The signal ends before the 0.70 pu recovery evaluation time.")
+    if end_time_s < criteria.idd_end_time_s:
+        raise ValueError("The signal ends before the IDD evaluation endpoint.")
 
     def interval(start_time_s: float, end_time_s: float) -> list[tuple[float, float]]:
         values = _samples_from_time(samples, start_time_s)
@@ -292,7 +307,7 @@ def assess_stability(
 
     fault_on_samples = interval(criteria.fault_time_s, criteria.clearance_time_s)
     recovery_samples = interval(criteria.clearance_time_s, criteria.response_end_time_s)
-    unified_samples = interval(criteria.fault_time_s, criteria.response_end_time_s)
+    idd_samples = interval(criteria.fault_time_s, criteria.idd_end_time_s)
     reference_start_time_s = end_time_s - criteria.final_reference_duration_s
     if reference_start_time_s < criteria.minimum_final_reference_start_time_s:
         raise ValueError("The final-reference interval starts too early.")
@@ -309,7 +324,7 @@ def assess_stability(
     if (
         len(fault_on_samples) < 2
         or len(recovery_samples) < 2
-        or len(unified_samples) < 2
+        or len(idd_samples) < 2
         or not reference_values
         or not final_settlement_values
         or len(low_voltage_samples) < 2
@@ -342,7 +357,7 @@ def assess_stability(
 
     fault_on_area_pu_s = response_area(fault_on_samples)
     recovery_area_pu_s = response_area(recovery_samples)
-    unified_response_area_pu_s = response_area(unified_samples)
+    idd_area_pu_s = response_area(idd_samples)
     final_settlement_peak_absolute_relative_error = max(
         abs(value / final_reference_value - 1.0) for value in final_settlement_values
     )
@@ -414,7 +429,7 @@ def assess_stability(
         pre_fault_reference_value=pre_fault_reference_value,
         fault_on_area_pu_s=fault_on_area_pu_s,
         recovery_area_pu_s=recovery_area_pu_s,
-        unified_response_area_pu_s=unified_response_area_pu_s,
+        idd_area_pu_s=idd_area_pu_s,
         final_reference_value=final_reference_value,
         final_settlement_peak_absolute_relative_error=final_settlement_peak_absolute_relative_error,
         final_settlement_peak_to_peak_relative_range=final_settlement_peak_to_peak_relative_range,

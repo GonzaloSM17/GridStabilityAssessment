@@ -162,8 +162,14 @@ class SingleRunVoltageStability:
                     f"{prefix + 1:02d}_{level}_kv_contingency_closeup.png",
                     self._plot_voltage_signals(
                         assessments,
-                        start_time_s=0.9,
-                        end_time_s=min(maximum_time_s, 2.2),
+                        start_time_s=max(
+                            0.0,
+                            self.profile.voltage_criteria.fault_time_s - 0.1,
+                        ),
+                        end_time_s=min(
+                            maximum_time_s,
+                            self.profile.voltage_criteria.fault_time_s + 1.5,
+                        ),
                         title=f"{level} kV Voltage Stability — Contingency Close-up",
                         bus_legend_location="lower center",
                     ),
@@ -216,13 +222,13 @@ class SingleRunVoltageStability:
         columns = tuple(item.bus.voltage_rms().column_name for item in assessments)
         data = self.run.dataset.read_series_window(columns, start_time_s, end_time_s)
         criteria = self.profile.voltage_criteria
-        areas = tuple(item.assessment.unified_response_area_pu_s for item in assessments)
+        areas = tuple(item.assessment.idd_area_pu_s for item in assessments)
         lower_area, upper_area, tick_step = _response_area_display_scale(areas)
         normalization = Normalize(lower_area, upper_area)
         observed_minimum_position = normalization(min(areas))
         observed_maximum_position = normalization(max(areas))
         color_map = LinearSegmentedColormap.from_list(
-            "response_area",
+            "idd_area",
             (
                 (0.0, "#009E73"),
                 (observed_minimum_position, "#009E73"),
@@ -241,7 +247,7 @@ class SingleRunVoltageStability:
             axis.plot(
                 data["time"],
                 data[name],
-                color=color_map(normalization(item.assessment.unified_response_area_pu_s)),
+                color=color_map(normalization(item.assessment.idd_area_pu_s)),
                 linewidth=0.8,
                 alpha=0.78,
                 label=item.bus.name if show_bus_legend else "_nolegend_",
@@ -258,7 +264,7 @@ class SingleRunVoltageStability:
         reference_legend = axis.legend(
             handles=(
                 Patch(facecolor="#F0B323", alpha=0.16, label="Contingency"),
-                Patch(facecolor="#F0B323", alpha=0.07, label="Recovery window"),
+                Patch(facecolor="#F0B323", alpha=0.07, label="IDD evaluation window"),
                 *self._voltage_reference_handles(),
             ),
             loc="lower right",
@@ -295,7 +301,7 @@ class SingleRunVoltageStability:
             tuple(lower_area + index * tick_step for index in range(tick_count + 1))
         )
         color_bar.set_label(
-            "Unified voltage-response area (pu·s)\n"
+            "IDD voltage-deviation area (pu*s)\n"
             f"Scale: {lower_area:.3f}–{upper_area:.3f}; "
             f"observed: {min(areas):.3f}–{max(areas):.3f}",
             fontsize=9,
@@ -315,7 +321,7 @@ class SingleRunVoltageStability:
         )
         axis.axvspan(
             criteria.clearance_time_s,
-            criteria.response_end_time_s,
+            criteria.idd_end_time_s,
             color="#F0B323",
             alpha=0.07,
             zorder=0,

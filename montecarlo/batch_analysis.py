@@ -150,14 +150,14 @@ def _response_area_colorbar_ticks(area_by_run_id: dict[int, float]) -> tuple[flo
 
 
 def _response_area_colorbar_label(area_by_run_id: dict[int, float]) -> str:
-    """Describe both display limits and the observed values behind one colorbar."""
+    """Describe both display limits and observed values for the IDD colorbar."""
     lower_limit, upper_limit, _ = _response_area_scale(area_by_run_id)
     areas = tuple(area_by_run_id.values())
     observed_range = "no assessed runs"
     if areas:
         observed_range = f"{min(areas):.3f}–{max(areas):.3f}"
     return (
-        "Unified voltage-response area, 1.00-2.00 s (pu*s)" + chr(10)
+        "IDD voltage-deviation area (pu*s)" + chr(10)
         + f"Scale: {lower_limit:.3f}–{upper_limit:.3f}; observed: {observed_range}"
     )
 
@@ -1583,21 +1583,21 @@ class AnalysisPipeline:
             ),
         )
 
-    def plot_unified_response_area_vs_weighted_controllers(
+    def plot_idd_area_vs_weighted_controllers(
         self,
         controller_analysis: ControllerStudyAnalysis,
         signal_analysis: SignalStudyAnalysis,
     ):
-        """Plot the unified one-second area from fault inception."""
+        """Plot the IDD voltage-deviation area from fault inception."""
         criteria = self._stability_criteria_from(signal_analysis)
         return self._plot_voltage_indicator_vs_weighted_controllers(
             controller_analysis,
             signal_analysis,
-            metric_attribute="unified_response_area_pu_s",
-            y_label="Unified response absolute-voltage area (pu*s)",
+            metric_attribute="idd_area_pu_s",
+            y_label="IDD voltage-deviation area (pu*s)",
             title=(
-                f"{signal_analysis.signal_name}: unified response area "
-                f"({criteria.fault_time_s:.2f}-{criteria.response_end_time_s:.2f} s)"
+                f"{signal_analysis.signal_name}: IDD voltage-deviation area "
+                f"({criteria.fault_time_s:.2f}-{criteria.idd_end_time_s:.2f} s)"
             ),
         )
 
@@ -2189,7 +2189,7 @@ class AnalysisPipeline:
         import matplotlib.cm as cm
 
         area_by_run_id = {
-            run_id: assessment.unified_response_area_pu_s
+            run_id: assessment.idd_area_pu_s
             for run_id, assessment in completed_assessments.items()
         }
         normalization, color_map = _response_area_color_scale(area_by_run_id)
@@ -2204,10 +2204,10 @@ class AnalysisPipeline:
             )
             axis.axvspan(
                 criteria.clearance_time_s,
-                criteria.response_end_time_s,
+                criteria.idd_end_time_s,
                 color="gold",
                 alpha=0.10,
-                label="Recovery window",
+                label="IDD evaluation window",
             )
             axis.axhline(
                 criteria.low_voltage_threshold_pu,
@@ -2295,8 +2295,8 @@ class AnalysisPipeline:
         criteria = self._stability_criteria_from(analysis)
         return self.plot_voltage_stability(
             analysis,
-            start_time_s=0.9,
-            end_time_s=2.2,
+            start_time_s=max(0.0, criteria.fault_time_s - 0.1),
+            end_time_s=criteria.fault_time_s + 1.5,
             title="contingency close-up",
         )
 
@@ -2343,7 +2343,7 @@ class AnalysisPipeline:
             self.profile.voltage_criteria,
         )
         area_by_run_id = {
-            result.run_id: result.stability.unified_response_area_pu_s
+            result.run_id: result.stability.idd_area_pu_s
             for result in analysis.run_results
             if result.stability is not None
         }
@@ -2360,10 +2360,10 @@ class AnalysisPipeline:
             )
             axis.axvspan(
                 criteria.clearance_time_s,
-                criteria.response_end_time_s,
+                criteria.idd_end_time_s,
                 color="gold",
                 alpha=0.10,
-                label="Voltage recovery window",
+                label="IDD evaluation window",
             )
             for run in self.context.runs:
                 if run.run_id not in run_ids or run.dataset is None:
