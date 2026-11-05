@@ -29,8 +29,8 @@ if __name__ == "__main__":
     assets_path = None
     output_path = None
     # Set this only for the historical study with HP_/HE_/GEO_ four-pole angles.
-    # angular_signal_normalization = None
-    angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
+    angular_signal_normalization = None
+    # angular_signal_normalization = LEGACY_MIXED_POLE_ANGULAR_NORMALIZATION
 
     workbench = SingleRunWorkbench(
         run_path,

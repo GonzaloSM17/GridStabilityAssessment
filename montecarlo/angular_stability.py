@@ -11,28 +11,43 @@ from stability.angular import (
     ANGULAR_REFERENCE_NOTE,
     AngularSignalNormalization,
     AngularCalculation,
+    AngularStabilityAnalysis,
     RepresentativeMachineReferenceCalculation,
+    RepresentativeMachineReferenceAnalysis,
 )
 from stability.scenario import ContingencyScenario
 from utils.figure_localization import save_figure_with_spanish_copy
 
 
+MAXIMUM_COI_PLOT_SAMPLES = 1_200
+
+
 @dataclass(frozen=True)
 class AngularRunAssessment:
-    """Angular result available for one Monte Carlo run."""
+    """Compact angular result retained for one Monte Carlo run.
+
+    The shared calculators work with the complete machine-by-time arrays.  A
+    Monte Carlo study only needs their scalar assessment evidence plus a
+    downsampled COI trace for its aggregate envelope figure.  Keeping the
+    complete arrays for every run would grow memory linearly with study size.
+    """
 
     run_id: int
     status: str
-    calculation: AngularCalculation | None
+    analysis: AngularStabilityAnalysis | None
     reason: str | None = None
-    representative_reference: RepresentativeMachineReferenceCalculation | None = None
+    representative_analysis: RepresentativeMachineReferenceAnalysis | None = None
+    representative_maximum_excursion_10s_degrees: float | None = None
+    representative_maximum_excursion_tmax_degrees: float | None = None
+    coi_time_values: tuple[float, ...] = ()
+    coi_angle_values: tuple[float, ...] = ()
 
     @property
     def critical_machine(self):
-        if self.calculation is None:
+        if self.analysis is None:
             return None
         return max(
-            self.calculation.analysis.machines,
+            self.analysis.machines,
             key=lambda machine: machine.maximum_absolute_excursion_degrees,
             default=None,
         )
@@ -40,15 +55,7 @@ class AngularRunAssessment:
     @property
     def representative_maximum_excursion_degrees(self) -> float | None:
         """Return the diagnostic maximum relative to the fixed representative machine."""
-        if self.representative_reference is None:
-            return None
-        return max(
-            (
-                machine.maximum_absolute_excursion_degrees
-                for machine in self.representative_reference.analysis.machines
-            ),
-            default=None,
-        )
+        return self.representative_maximum_excursion_tmax_degrees
 
 
 @dataclass(frozen=True)
@@ -94,7 +101,7 @@ class MonteCarloAngularStability:
         self.angular_signal_normalization = angular_signal_normalization
 
     def analyze(self) -> AngularStudyAnalysis:
-        """Evaluate every run independently, retaining unavailable evidence."""
+        """Evaluate every run, retaining compact evidence only."""
         assessments = []
         for run in self.runs:
             if run.dataset is None:
@@ -121,11 +128,10 @@ class MonteCarloAngularStability:
                 )
                 continue
             assessments.append(
-                AngularRunAssessment(
+                self._compact_run_assessment(
                     run.run_id,
-                    "Stable" if calculation.analysis.is_stable else "Unstable",
                     calculation,
-                    representative_reference=representative_reference,
+                    representative_reference,
                 )
             )
         return AngularStudyAnalysis(
@@ -141,6 +147,75 @@ class MonteCarloAngularStability:
                 else None
             ),
         )
+
+    @staticmethod
+    def _compact_run_assessment(
+        run_id: int,
+        calculation: AngularCalculation,
+        representative_reference: RepresentativeMachineReferenceCalculation,
+    ) -> AngularRunAssessment:
+        """Discard full matrix traces after extracting Monte Carlo evidence."""
+        time_values, coi_values = MonteCarloAngularStability._downsample_coi_trace(
+            calculation.time_values,
+            calculation.centre_of_inertia,
+        )
+        return AngularRunAssessment(
+            run_id=run_id,
+            status="Stable" if calculation.analysis.is_stable else "Unstable",
+            analysis=calculation.analysis,
+            representative_analysis=representative_reference.analysis,
+            representative_maximum_excursion_10s_degrees=(
+                MonteCarloAngularStability._representative_window_maximum(
+                    representative_reference,
+                    end_time_s=10.0,
+                )
+            ),
+            representative_maximum_excursion_tmax_degrees=max(
+                (
+                    machine.maximum_absolute_excursion_degrees
+                    for machine in representative_reference.analysis.machines
+                ),
+                default=None,
+            ),
+            coi_time_values=time_values,
+            coi_angle_values=coi_values,
+        )
+
+    @staticmethod
+    def _downsample_coi_trace(
+        time_values: tuple[float, ...],
+        coi_values: tuple[float, ...],
+    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Keep a display-quality COI trace through the ten-second plot window."""
+        import bisect
+
+        end_index = bisect.bisect_right(time_values, 10.0)
+        if end_index == 0:
+            return (), ()
+        stride = max(1, (end_index + MAXIMUM_COI_PLOT_SAMPLES - 1) // MAXIMUM_COI_PLOT_SAMPLES)
+        indices = list(range(0, end_index, stride))
+        if indices[-1] != end_index - 1:
+            indices.append(end_index - 1)
+        return (
+            tuple(time_values[index] for index in indices),
+            tuple(coi_values[index] for index in indices),
+        )
+
+    @staticmethod
+    def _representative_window_maximum(
+        calculation: RepresentativeMachineReferenceCalculation,
+        *,
+        end_time_s: float,
+    ) -> float:
+        """Return a diagnostic maximum in one window without retaining its matrix."""
+        import bisect
+        import numpy as np
+
+        end_index = bisect.bisect_right(calculation.time_values, end_time_s)
+        if end_index == 0:
+            return 0.0
+        values = np.asarray(calculation.excursions, dtype=float)
+        return float(np.max(np.abs(values[:, :end_index])))
 
     def create(self, output_directory: str | Path) -> AngularStabilityResult:
         """Save compact evidence for the run-level angular conclusion."""
@@ -188,15 +263,20 @@ class MonteCarloAngularStability:
         import matplotlib.pyplot as plt
 
         figure, axis = plt.subplots(figsize=(13.5, 5.6))
-        available = [item for item in analysis.run_assessments if item.calculation]
+        available = [
+            item
+            for item in analysis.run_assessments
+            if item.analysis is not None and item.coi_time_values
+        ]
         colors = {"Stable": "#0072B2", "Unstable": "#D55E00"}
         for item in available:
-            calculation = item.calculation
-            time, values = self._plot_window(
-                calculation.time_values,
-                calculation.centre_of_inertia,
+            axis.plot(
+                item.coi_time_values,
+                item.coi_angle_values,
+                color=colors[item.status],
+                alpha=0.16,
+                linewidth=0.7,
             )
-            axis.plot(time, values, color=colors[item.status], alpha=0.16, linewidth=0.7)
         self._draw_event_context(axis)
         axis.set(
             xlim=(0.0, self._maximum_plot_time(available)),
@@ -311,7 +391,7 @@ class MonteCarloAngularStability:
             selected = [
                 item
                 for item in analysis.run_assessments
-                if item.status == status and item.representative_reference is not None
+                if item.status == status and item.representative_analysis is not None
             ]
             if not selected:
                 continue
@@ -357,17 +437,12 @@ class MonteCarloAngularStability:
         assessment: AngularRunAssessment,
         end_time_s: float | None,
     ) -> float:
-        """Return the selected-window maximum across all diagnostic machine curves."""
-        calculation = assessment.representative_reference
-        if calculation is None:
+        """Return the compact diagnostic maximum for the requested window."""
+        if assessment.representative_analysis is None:
             raise ValueError("Representative-machine reference is unavailable.")
-        values = (
-            abs(value)
-            for excursion in calculation.excursions
-            for time, value in zip(calculation.time_values, excursion)
-            if end_time_s is None or time <= end_time_s
-        )
-        return max(values, default=0.0)
+        if end_time_s is None:
+            return assessment.representative_maximum_excursion_tmax_degrees or 0.0
+        return assessment.representative_maximum_excursion_10s_degrees or 0.0
 
     def _draw_event_context(self, axis) -> None:
         axis.axvspan(
@@ -379,17 +454,10 @@ class MonteCarloAngularStability:
         )
 
     @staticmethod
-    def _plot_window(time_values, values):
-        return (
-            [time for time in time_values if time <= 10.0],
-            [value for time, value in zip(time_values, values) if time <= 10.0],
-        )
-
-    @staticmethod
     def _maximum_plot_time(assessments) -> float:
         return min(
             10.0,
-            max(item.calculation.time_values[-1] for item in assessments),
+            max(item.coi_time_values[-1] for item in assessments),
         ) if assessments else 10.0
 
     @staticmethod

@@ -171,8 +171,8 @@ class AnalysisReport:
                     else None
                 ),
                 (
-                    angular.representative_reference.analysis.reference_machine_name
-                    if angular is not None and angular.representative_reference is not None
+                    angular.representative_analysis.reference_machine_name
+                    if angular is not None and angular.representative_analysis is not None
                     else None
                 ),
                 (
@@ -266,7 +266,7 @@ class AnalysisReport:
             "First Limit Violation [s]", "Reason",
         ))
         for run_assessment in self.angular_stability_analysis.run_assessments:
-            if run_assessment.calculation is None:
+            if run_assessment.analysis is None:
                 sheet.append((
                     self._run_name(run_assessment.run_id),
                     run_assessment.status,
@@ -278,7 +278,7 @@ class AnalysisReport:
                     run_assessment.reason,
                 ))
                 continue
-            for machine in run_assessment.calculation.analysis.machines:
+            for machine in run_assessment.analysis.machines:
                 sheet.append((
                     self._run_name(run_assessment.run_id),
                     run_assessment.status,
@@ -296,13 +296,13 @@ class AnalysisReport:
             "Maximum absolute diagnostic excursion [deg]", "Role",
         ))
         for run_assessment in self.angular_stability_analysis.run_assessments:
-            reference = run_assessment.representative_reference
+            reference = run_assessment.representative_analysis
             if reference is None:
                 continue
-            for machine in reference.analysis.machines:
+            for machine in reference.machines:
                 sheet.append((
                     self._run_name(run_assessment.run_id),
-                    reference.analysis.reference_machine_name,
+                    reference.reference_machine_name,
                     machine.machine_name,
                     machine.minimum_excursion_degrees,
                     machine.maximum_excursion_degrees,
