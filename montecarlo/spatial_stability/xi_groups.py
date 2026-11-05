@@ -144,13 +144,13 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         for group in info["groups"]:
             selected = [cases[c] for c, label in zip(ids, info["labels"]) if label == group["group"]]
             summary_rows.append(dict(basis=basis, **group,
-                stable=sum(c.status == "Stable" for c in selected),
-                unstable=sum(c.status == "Unstable" for c in selected),
+                compliant=sum(c.status == "Compliant" for c in selected),
+                non_compliant=sum(c.status == "Non-compliant" for c in selected),
                 not_evaluated=sum(c.status == "Not evaluated" for c in selected)))
     _csv(out/"xi_group_cases.csv", case_rows, ["basis", "case_id", "new_group", "xi_mean",
          "xi_spread", "PC1", "PC2", "status", "voltage_status", "modal_damping_status", "angular_status"])
     _csv(out/"xi_group_summary.csv", summary_rows, ["basis", "group", "n_cases", "mean_xi",
-         "mean_xi_spread", "xi_relation", "spread_relation", "stable", "unstable", "not_evaluated"])
+         "mean_xi_spread", "xi_relation", "spread_relation", "compliant", "non_compliant", "not_evaluated"])
     metadata = dict(
         case_ids=list(ids), clustering=groups,
         pca_scope="Same ten-indicator population-weighted PCA coordinates as graph 06",
@@ -166,7 +166,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         FigureCanvasAgg(fig)
         axes = fig.subplots(2, 2)
         colors = {1: "#1f77b4", 2: "#ff7f0e"}
-        markers = {"Stable": "o", "Unstable": "X", "Not evaluated": "D"}
+        markers = {"Compliant": "o", "Non-compliant": "X", "Not evaluated": "D"}
         statuses = np.array([cases[c].status for c in ids])
         for col, basis in enumerate(("units", "mva")):
             info = groups[basis]
@@ -190,8 +190,8 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
                         if mask.any():
                             axis.scatter(coordinates[0][mask], coordinates[1][mask], s=52,
                                 marker=markers[status], color=colors[group], alpha=.9,
-                                edgecolor="white" if status == "Stable" else "#222222",
-                                linewidth=.65, zorder=3 if status == "Stable" else 2)
+                                edgecolor="white" if status == "Compliant" else "#222222",
+                                linewidth=.65, zorder=3 if status == "Compliant" else 2)
                 axis.grid(alpha=.2)
             name = "Unidades" if basis == "units" else "MVA"
             axes[0, col].set(
@@ -212,7 +212,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         fig.legend(handles=handles, loc="outside lower center", ncol=len(handles), fontsize=10)
         fig.suptitle("Dos grupos nuevos segun xi medio y dispersion de xi\n"
                      "Arriba: proyeccion PCA ponderada | Abajo: indicadores que forman los grupos\n"
-                     "fn y estabilidad no intervienen en esta nueva separacion; G1/G2 son relativos a la muestra")
+                     "fn y cumplimiento NT no intervienen en esta nueva separacion; G1/G2 son relativos a la muestra")
         path = out/"09_xi_groups_weighted_pca.png"
         try:
             save_figure_with_spanish_copy(fig, path, dpi=170)
@@ -228,7 +228,7 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         "anteriores a partir de dos indicadores del conjunto de dispositivos de cada caso: "
         "xi medio y desviacion estandar de xi. Cada corrida es una observacion.", "",
         "Se estandarizan estos dos indicadores para darles igual escala y se ajusta "
-        "k-means con k=2, n_init=30 y semilla registrada. No se usa fn, estabilidad, "
+        "k-means con k=2, n_init=30 y semilla registrada. No se usa fn, cumplimiento NT, "
         "posicion ni coordenadas PCA para formar estos grupos. El promedio y dispersion "
         "usan igual peso por unidad o ponderacion MVA, segun el panel. Las dos versiones "
         "pueden producir pertenencias distintas. No se fijan umbrales operativos de xi.", "",
@@ -240,14 +240,14 @@ def export_xi_groups(analysis, out, case_ids, *, pca_models=None, seed=42, resam
         "Los paneles superiores reutilizan exactamente los ejes ponderados del grafico 06 "
         "(diez indicadores). Los paneles inferiores muestran los dos indicadores fisicos usados "
         "para separar los grupos. fn puede afectar la proyeccion superior, pero no sus colores. "
-        "Circulo: estable, X: inestable. No evaluados no se dibujan. La estabilidad proviene "
-        "del criterio nativo registrado en xi_groups_metadata.json y no entra al ajuste.", "",
-        "| Ponderacion | Grupo | Casos | xi medio | Dispersion media | Estables | Inestables |",
+        "Circulo: cumple NT, X: no cumple NT. No evaluados no se dibujan. El cumplimiento NT proviene "
+        "del criterio comun registrado en xi_groups_metadata.json y no entra al ajuste.", "",
+        "| Ponderacion | Grupo | Casos | xi medio | Dispersion media | Cumple NT | No cumple NT |",
         "|---|---|---:|---:|---:|---:|---:|",
     ]
     for r in summary_rows:
         lines.append(f"| {r['basis']} | G{r['group']} | {r['n_cases']} | {r['mean_xi']:.5f} | "
-                     f"{r['mean_xi_spread']:.5f} | {r['stable']} | {r['unstable']} |")
+                     f"{r['mean_xi_spread']:.5f} | {r['compliant']} | {r['non_compliant']} |")
     lines += ["", "xi_group_cases.csv conserva pertenencias nuevas y coordenadas por corrida; "
               "xi_group_summary.csv resume los perfiles. xi_groups_metadata.json incluye "
               "escalado, semillas, calidad y los ejes PCA completos.", ""]

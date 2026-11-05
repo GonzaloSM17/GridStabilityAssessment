@@ -1,4 +1,4 @@
-"""Decision-tree leaves with native outcomes and class-specific parameter profiles."""
+"""Decision-tree leaves with Grid Code outcomes and class-specific profiles."""
 import json
 from pathlib import Path
 import numpy as np
@@ -42,7 +42,7 @@ def leaf_profiles(tree, values, y, case_ids, assessments, *, feature_names=FEATU
     if not set(np.unique(y)).issubset({0, 1}):
         raise ValueError("Only evaluated native classes can enter the tree")
     for identifier, label in zip(ids, y):
-        expected = "Unstable" if label else "Stable"
+        expected = "Non-compliant" if label else "Compliant"
         if identifier not in assessments or _get(assessments[identifier], "status") != expected:
             raise ValueError("Leaf labels differ from native assessments")
     nodes = tree.tree_
@@ -103,7 +103,7 @@ def leaf_profiles(tree, values, y, case_ids, assessments, *, feature_names=FEATU
         for identifier, selected, label in zip(ids, mask, y):
             if selected:
                 membership.append(dict(case_id=identifier, leaf=number, node=int(node),
-                                       native_status="Unstable" if label else "Stable"))
+                                       native_status="Non-compliant" if label else "Compliant"))
     return summaries, profiles, membership
 
 
@@ -116,18 +116,18 @@ def leaf_text(summary, rows, *, display_names=NAMES):
     n, stable, unstable = summary["n_cases"], summary["stable"], summary["unstable"]
     lines = [
         f"HOJA {summary['leaf']} | {n} corridas",
-        f"Estables: {stable} ({100*stable/n:.1f}%)",
-        f"Inestables: {unstable} ({100*unstable/n:.1f}%)",
+        f"Cumple NT: {stable} ({100*stable/n:.1f}%)",
+        f"No cumple NT: {unstable} ({100*unstable/n:.1f}%)",
         "",
-        "Medianas entre corridas | E=estable, I=inestable",
-        f"{'Indicador':<13} {'E':>8} {'I':>8} {'I-E':>9}",
+        "Medianas entre corridas | C=cumple NT, NC=no cumple NT",
+        f"{'Indicador':<13} {'C':>8} {'NC':>8} {'NC-C':>9}",
     ]
     for name, row in zip(display_names, rows):
         digits = 3 if name.startswith("fn ") else 4
         lines.append(f"{name:<13} {value(row['median_stable'],digits):>8} "
                      f"{value(row['median_unstable'],digits):>8} "
                      f"{value(row['delta_unstable_minus_stable'],digits,True):>9}")
-    lines += ["", "Fallas / evaluados entre los INESTABLES:"]
+    lines += ["", "Fallas / evaluados entre los casos NO CUMPLE NT:"]
     for label, criterion in (("Tension", "voltage"), ("Amortiguamiento modal", "damping"), ("Angulo", "angle")):
         if criterion == "angle" and not summary.get("angular_criterion_active", True):
             continue
@@ -135,7 +135,7 @@ def leaf_text(summary, rows, *, display_names=NAMES):
         failures = summary[criterion+"_failures_unstable"]
         lines.append(f"{label}: {failures}/{evaluated}" if evaluated else f"{label}: sin evaluados")
     if summary["small_stable"] or summary["small_unstable"]:
-        classes = ", ".join(name for name, key in (("E", "small_stable"), ("I", "small_unstable"))
+        classes = ", ".join(name for name, key in (("C", "small_stable"), ("NC", "small_unstable"))
                             if summary[key])
         lines += [f"Pocos casos en {classes}: n < 5"]
     if not stable or not unstable:
@@ -173,7 +173,7 @@ def _draw_tree(axis, tree, y, summaries, profiles, basis, *, display_names=NAMES
             name = display_names[nodes.feature[node]]
             text = (f"{name} <= {nodes.threshold[node]:.6g}\n"
                     f"Corridas: {nodes.n_node_samples[node]}\n"
-                    f"Estables: {stable} | Inestables: {unstable}\nGini: {nodes.impurity[node]:.3f}")
+                    f"Cumple NT: {stable} | No cumple NT: {unstable}\nGini: {nodes.impurity[node]:.3f}")
             majority_stable = stable > unstable
             fontsize = 11
         face, edge = ("#e5f0fa", "#0072B2") if majority_stable else ("#fbe7da", "#D55E00")
@@ -198,7 +198,7 @@ def _draw_tree(axis, tree, y, summaries, profiles, basis, *, display_names=NAMES
                       transform=axis.transAxes,ha="center",fontsize=9,
                       bbox=dict(facecolor="white", edgecolor="none",pad=1),zorder=2)
     title = ("Igual peso por unidad" if basis == "units" else "Ponderacion por potencia MVA")
-    axis.set_title(title+"\nMedianas de indicadores por corrida en cada clase; I-E es una diferencia, no un coeficiente",
+    axis.set_title(title+"\nMedianas de indicadores por corrida en cada clase; NC-C es una diferencia, no un coeficiente",
                    fontsize=12, pad=22)
     axis.set_axis_off()
 
@@ -226,7 +226,7 @@ def export_descriptive_trees(out, matrices, y, case_ids, assessments, *, seed=19
         summaries.extend(dict(basis=basis,**r) for r in a)
         profiles.extend(dict(basis=basis,**r) for r in b)
         memberships.extend(dict(basis=basis,**r) for r in c)
-        rules.append(basis+"\n0=Estable; 1=Inestable\n"+
+        rules.append(basis+"\n0=Cumple NT; 1=No cumple NT\n"+
                      export_text(tree, feature_names=list(display_names),decimals=6))
     _csv(out/"tree_leaf_summary.csv",summaries,list(summaries[0]))
     _csv(out/"tree_leaf_profiles.csv",profiles,list(profiles[0]))
@@ -238,8 +238,8 @@ def export_descriptive_trees(out, matrices, y, case_ids, assessments, *, seed=19
         FigureCanvasAgg(fig)
         return fig
     def finish(fig,name):
-        fig.suptitle("Arbol descriptivo con perfiles de xi y fn separados por estabilidad nativa\n"
-                     "Azul: mayoria estable | Naranja: mayoria inestable; cada hoja conserva ambas clases\n"
+        fig.suptitle("Arbol descriptivo con perfiles de xi y fn separados por cumplimiento NT\n"
+                     "Azul: mayoria cumple NT | Naranja: mayoria no cumple NT; cada hoja conserva ambas clases\n"
                      "Medianas y umbrales descriptivos de esta muestra; no demuestran influencia causal",
                      fontsize=14)
         path = out/name
@@ -270,8 +270,8 @@ def export_descriptive_trees(out, matrices, y, case_ids, assessments, *, seed=19
     metadata = dict(
         seed=seed,max_depth=2,min_samples_leaf=max(8,int(.1*len(y))),case_ids=list(case_ids),
         features=list(feature_names),summary="Class-specific medians and median(I)-median(E); raw ranges in CSV",
-        native_labels="Unchanged; class-specific counts use native labels, never node predictions",
-        criteria="Failures/evaluated within native Unstable cases; criteria can overlap; unknown evidence excluded from each denominator",
+        native_labels="Grid Code compliance labels; class-specific counts never use node predictions",
+        criteria="Failures/evaluated within Grid Code non-compliant cases; criteria can overlap; unknown evidence excluded from each denominator",
         missing_class="Shown as --; never imputed as zero",
         small_class="Flag if 0 < class count < 5; descriptive summaries can be unstable with few cases",
         interpretation="Descriptive post-hoc leaf profiles of full-sample trees; not causal effects, validated thresholds or out-of-sample leaf performance",
@@ -317,8 +317,8 @@ def build_global_tree_inputs(analysis):
     mapped = {row["case_id"] for row in mva_rows}
     cases = {case.case_id: case.assessment for case in analysis.cases}
     ids = tuple(sorted(identifier for identifier in mapped
-                       if cases[identifier].status in {"Stable", "Unstable"}))
-    y = np.array([cases[identifier].status == "Unstable" for identifier in ids], dtype=int)
+                       if cases[identifier].status in {"Compliant", "Non-compliant"}))
+    y = np.array([cases[identifier].status == "Non-compliant" for identifier in ids], dtype=int)
     matrices = {}
     for basis, rows in (("units", unit_rows), ("mva", mva_rows)):
         lookup = {row["case_id"]: row for row in rows}
@@ -327,7 +327,7 @@ def build_global_tree_inputs(analysis):
         ], dtype=float).reshape(-1, len(GLOBAL_FEATURES))
     excluded = [dict(case_id=case.case_id,
                      reason="No mapped controllers" if case.case_id not in mapped
-                     else "Native stability not evaluated")
+                     else "Grid Code compliance not evaluated")
                 for case in analysis.cases if case.case_id not in ids]
     return ids, y, matrices, excluded
 
@@ -345,7 +345,7 @@ def export_global_descriptive_trees(analysis, out, *, seed=1900):
                     remove_figure_with_spanish_copy(path)
                 else:
                     path.unlink()
-        metadata = dict(status="not_fitted", reason="Need both evaluated native stability classes",
+        metadata = dict(status="not_fitted", reason="Need both evaluated Grid Code compliance classes",
                         features=list(GLOBAL_FEATURES), case_ids=list(ids))
         (out/"tree_profile_metadata.json").write_text(json.dumps(metadata,indent=2),encoding="utf-8")
         return ()
@@ -365,7 +365,7 @@ def export_global_descriptive_trees(analysis, out, *, seed=1900):
                     native_criterion=analysis.criterion_description,include_angle=analysis.include_angle,
                     voltage_scope=analysis.voltage_scope,excluded_cases=excluded,
                     counts={status:sum(assessments[c].status==status for c in ids)
-                            for status in ("Stable","Unstable")},
+                            for status in ("Compliant","Non-compliant")},
                     weighting="Within case: MVA fractions or equal controller weights; equal case weight in tree fitting",
                     dispersion="Population standard deviation: sqrt(sum(w * (parameter - weighted_mean)**2)); fn in Hz")
     metadata_path.write_text(json.dumps(metadata,indent=2),encoding="utf-8")

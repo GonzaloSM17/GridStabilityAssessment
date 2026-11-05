@@ -1,4 +1,4 @@
-"""Adapt published run parameters and shared stability analyses to spatial maps."""
+"""Adapt published run parameters and shared Grid Code assessments to spatial maps."""
 from collections import Counter
 from dataclasses import replace
 from math import isfinite, pi, sqrt
@@ -130,7 +130,7 @@ def assess_components(
     include_angle=True,
     monte_carlo_policy=False,
 ):
-    """Apply the same aggregation rules as SingleRunWorkbench.create_report."""
+    """Apply the common Grid Code and dynamic-diagnosis decision table."""
     voltage_status = "Not evaluated"
     if voltage is not None and voltage.assessments:
         voltage_status = "Stable" if all(item.assessment.is_stable for item in voltage.assessments) else "Unstable"
@@ -145,14 +145,12 @@ def assess_components(
     angular_status = "Not evaluated"
     if include_angle and angular is not None and angular.machines:
         angular_status = "Stable" if angular.is_stable else "Unstable"
-    if monte_carlo_policy or not include_angle:
-        return assess_monte_carlo_stability(
-            run_id,
-            voltage_status,
-            damping_status,
-            angular_status if include_angle else None,
-        )
-    return assess_dynamic_stability(run_id, voltage_status, damping_status, angular_status)
+    return assess_dynamic_stability(
+        run_id,
+        voltage_status,
+        damping_status,
+        angular_status if include_angle else None,
+    )
 
 
 def assess_run(
@@ -245,9 +243,12 @@ class SpatialStabilityAnalyzer:
                     assessment.modal_damping_status,
                     assessment.angular_status if self.include_angle else None,
                 )
-                if (assessment.run_id != run.run_id
-                        or assessment.status != expected.status):
-                    raise ValueError("Cached labels differ from the Monte Carlo criterion")
+                if (
+                    assessment.run_id != run.run_id
+                    or assessment.grid_code_status != expected.grid_code_status
+                    or assessment.status != expected.status
+                ):
+                    raise ValueError("Cached labels differ from the common assessment")
         if progress:
             scope = "voltage, damping and angle" if self.include_angle else "voltage and damping (no angle)"
             action = "reusing Monte Carlo classifications" if case_assessments is not None else f"evaluating {scope}"
@@ -272,9 +273,9 @@ class SpatialStabilityAnalyzer:
                 progress(f"Spatial stability: evaluated {completed}/{len(runs)} runs")
                 last_report = now
         if progress:
-            counts = Counter(case.assessment.status for case in cases)
+            counts = Counter(case.assessment.grid_code_status for case in cases)
             progress(f"Spatial stability: evaluated {len(cases)}/{len(runs)} runs; "
-                     f"{counts['Stable']} stable, {counts['Unstable']} unstable, "
+                     f"{counts['Compliant']} compliant, {counts['Non-compliant']} non-compliant, "
                      f"{counts['Not evaluated']} not evaluated")
         return SpatialStabilityAnalysis(
             tuple(points),

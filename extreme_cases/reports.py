@@ -35,7 +35,8 @@ def write_extreme_cases_report(
     sheet = workbook.create_sheet("Extreme Cases")
     sheet.append((
         "Run", "Case", "Common fn [Hz]", "Common xi [-]",
-        "Voltage Stability (KIMAL_220)", "Transfer Damping", "Global Dynamic Stability",
+        "Voltage Grid Code Compliance (KIMAL_220)", "Transfer Damping",
+        "Grid Code Compliance", "Dynamic Stability Diagnosis",
     ))
     header_fill = PatternFill("solid", fgColor="1F4E78")
     for cell in sheet[1]:
@@ -48,8 +49,12 @@ def write_extreme_cases_report(
             case.definition.label,
             case.definition.fn_hz,
             case.definition.xi,
-            study_analysis.status_for_run(run_id),
+            {
+                "Stable": "Compliant",
+                "Unstable": "Non-compliant",
+            }.get(study_analysis.status_for_run(run_id), "Not evaluated"),
             transfer_analysis.modal_damping_status_for_run(run_id),
+            dynamic.grid_code_status,
             dynamic.status,
         ))
     sheet.append(())

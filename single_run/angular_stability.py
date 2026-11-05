@@ -193,7 +193,13 @@ class SingleRunAngularStability:
         figure, axis = plt.subplots(figsize=(13.5, 6.5))
         self._draw_machine_excursions(axis, calculation)
         axis.set_title("Machine Angular Excursions Relative to the Centre of Inertia", fontsize=12, fontweight="normal", pad=7)
-        figure.suptitle("Angular Stability — " + ("Stable" if calculation.analysis.is_stable else "Unstable"), fontsize=13, fontweight="normal", y=0.975)
+        figure.suptitle(
+            "Angular separation — "
+            + self._angular_compliance_label(calculation.analysis.is_stable),
+            fontsize=13,
+            fontweight="normal",
+            y=0.975,
+        )
         figure.text(0.5, 0.015, ANGULAR_DISCLAIMER, ha="center", va="bottom", fontsize=9, color="#404040")
         figure.subplots_adjust(left=0.085, right=0.95, bottom=0.12, top=0.89)
         return figure
@@ -209,7 +215,13 @@ class SingleRunAngularStability:
         self._style_axis(top_axis)
         self._draw_machine_excursions(bottom_axis, calculation)
         bottom_axis.set_title("Machine Angular Excursions Relative to the Centre of Inertia", fontsize=11, fontweight="normal", pad=6)
-        figure.suptitle("Angular Stability — " + ("Stable" if calculation.analysis.is_stable else "Unstable"), fontsize=13, fontweight="normal", y=0.975)
+        figure.suptitle(
+            "Angular separation — "
+            + self._angular_compliance_label(calculation.analysis.is_stable),
+            fontsize=13,
+            fontweight="normal",
+            y=0.975,
+        )
         figure.text(0.5, 0.015, ANGULAR_DISCLAIMER, ha="center", va="bottom", fontsize=9, color="#404040")
         figure.subplots_adjust(left=0.085, right=0.95, bottom=0.09, top=0.91, hspace=0.30)
         return figure
@@ -339,8 +351,8 @@ class SingleRunAngularStability:
             pad=6,
         )
         figure.suptitle(
-            "Angular Stability — "
-            + ("Stable" if calculation.analysis.is_stable else "Unstable"),
+            "Angular separation — "
+            + self._angular_compliance_label(calculation.analysis.is_stable),
             fontsize=13,
             fontweight="normal",
             y=0.975,
@@ -466,3 +478,8 @@ class SingleRunAngularStability:
     def _plot_end_time_s(self) -> float:
         """Return the available simulation time, capped at ten seconds."""
         return min(self.run.dataset.maximum_time_s(), 10.0)
+
+    @staticmethod
+    def _angular_compliance_label(is_within_limit: bool) -> str:
+        """Describe the local angular criterion without implying global stability."""
+        return "Within angular limit" if is_within_limit else "Exceeds angular limit"

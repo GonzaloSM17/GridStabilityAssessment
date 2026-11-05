@@ -526,7 +526,7 @@ class AnalysisPipeline:
         transfer_analysis: TransferStudyAnalysis,
         angular_analysis: AngularStudyAnalysis | None = None,
     ) -> ContingencyDynamicStabilityAnalysis:
-        """Combine voltage, active-power damping, and angular stability."""
+        """Combine voltage, damping and angle into NT compliance and diagnosis."""
         assessments = []
         for run_id in study_analysis.run_ids:
             voltage_status = study_analysis.status_for_run(run_id)
@@ -1450,7 +1450,7 @@ class AnalysisPipeline:
         study_analysis: StudyAnalysis | None = None,
         dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ):
-        """Plot all machine controllers using the global run stability status."""
+        """Plot all machine controllers using the Grid Code compliance status."""
         figure, axis = self._create_controller_figure(
             self._controller_figure_title(
                 "Controller population across all active machines",
@@ -1458,42 +1458,14 @@ class AnalysisPipeline:
                 dynamic_stability_analysis,
             )
         )
-        stable_run_ids = self._stable_run_ids(
+        self._plot_controller_grid_code_groups(
+            axis,
+            analysis.controller_points,
             study_analysis,
             dynamic_stability_analysis,
+            size=8,
+            alpha=0.34,
         )
-        stable_points = [
-            point for point in analysis.controller_points if point.run_id in stable_run_ids
-        ]
-        unstable_points = [
-            point for point in analysis.controller_points if point.run_id not in stable_run_ids
-        ]
-        axis.scatter(
-            [point.fn_hz for point in stable_points],
-            [point.xi for point in stable_points],
-            s=8,
-            color="tab:blue",
-            alpha=0.28,
-            label="Stable",
-        )
-        if study_analysis is not None:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=8,
-                color="tab:red",
-                alpha=0.38,
-            label="Unstable",
-            )
-        elif unstable_points:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=8,
-                color="tab:blue",
-                alpha=0.28,
-                label="Controller point",
-            )
         axis.legend(
             loc="lower right",
             bbox_to_anchor=(0.99, 0.01),
@@ -1510,7 +1482,7 @@ class AnalysisPipeline:
         study_analysis: StudyAnalysis | None = None,
         dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
     ):
-        """Plot weighted controllers using the global run stability status."""
+        """Plot weighted controllers using the Grid Code compliance status."""
         figure, axis = self._create_controller_figure(
             self._controller_figure_title(
                 "Nominal-power-weighted controller point by run",
@@ -1518,42 +1490,14 @@ class AnalysisPipeline:
                 dynamic_stability_analysis,
             )
         )
-        stable_run_ids = self._stable_run_ids(
+        self._plot_controller_grid_code_groups(
+            axis,
+            analysis.weighted_run_points,
             study_analysis,
             dynamic_stability_analysis,
+            size=22,
+            alpha=0.62,
         )
-        stable_points = [
-            point for point in analysis.weighted_run_points if point.run_id in stable_run_ids
-        ]
-        unstable_points = [
-            point for point in analysis.weighted_run_points if point.run_id not in stable_run_ids
-        ]
-        axis.scatter(
-            [point.fn_hz for point in stable_points],
-            [point.xi for point in stable_points],
-            s=22,
-            color="tab:blue",
-            alpha=0.55,
-            label="Stable",
-        )
-        if study_analysis is not None:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=22,
-                color="tab:red",
-                alpha=0.65,
-            label="Unstable",
-            )
-        elif unstable_points:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=22,
-                color="tab:blue",
-                alpha=0.55,
-                label="Controller point",
-            )
         axis.legend(
             loc="lower right",
             bbox_to_anchor=(0.99, 0.01),
@@ -1578,42 +1522,14 @@ class AnalysisPipeline:
                 dynamic_stability_analysis,
             )
         )
-        stable_run_ids = self._stable_run_ids(
+        self._plot_controller_grid_code_groups(
+            axis,
+            analysis.weighted_run_points,
             study_analysis,
             dynamic_stability_analysis,
+            size=22,
+            alpha=0.62,
         )
-        stable_points = [
-            point for point in analysis.weighted_run_points if point.run_id in stable_run_ids
-        ]
-        unstable_points = [
-            point for point in analysis.weighted_run_points if point.run_id not in stable_run_ids
-        ]
-        axis.scatter(
-            [point.fn_hz for point in stable_points],
-            [point.xi for point in stable_points],
-            s=22,
-            color="tab:blue",
-            alpha=0.55,
-            label="Stable",
-        )
-        if study_analysis is not None:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=22,
-                color="tab:red",
-                alpha=0.65,
-                label="Unstable",
-            )
-        elif unstable_points:
-            axis.scatter(
-                [point.fn_hz for point in unstable_points],
-                [point.xi for point in unstable_points],
-                s=22,
-                color="tab:blue",
-                alpha=0.55,
-                label="Controller point",
-            )
         axis.set_xscale("log")
         # A logarithmic axis cannot retain the linear figure's zero lower bound.
         # The positive 1 Hz margin gives visual room before the 2 Hz design range.
@@ -1755,8 +1671,8 @@ class AnalysisPipeline:
         criterion_limit: float | None = None,
         criterion_label: str | None = None,
         status_attribute: str | None = None,
-        passed_label: str = "Stable",
-        failed_label: str = "Unstable",
+        passed_label: str = "Compliant",
+        failed_label: str = "Non-compliant",
     ):
         """Plot one local voltage indicator against the weighted controls."""
         import matplotlib.pyplot as plt
@@ -1912,21 +1828,70 @@ class AnalysisPipeline:
         axis.grid(visible=True, alpha=0.3)
         return figure, axis
 
+    def _plot_controller_grid_code_groups(
+        self,
+        axis,
+        points,
+        study_analysis: StudyAnalysis | None,
+        dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None,
+        *,
+        size: float,
+        alpha: float,
+    ) -> None:
+        """Draw controller points by scenario-level Grid Code compliance."""
+        groups = self._grid_code_status_by_run(
+            study_analysis,
+            dynamic_stability_analysis,
+        )
+        if not groups:
+            axis.scatter(
+                [point.fn_hz for point in points],
+                [point.xi for point in points],
+                s=size,
+                color="tab:blue",
+                alpha=alpha,
+                label="Controller point",
+            )
+            return
+        for status, color in (
+            ("Compliant", "tab:blue"),
+            ("Non-compliant", "tab:red"),
+            ("Not evaluated", "#777777"),
+        ):
+            selected = [point for point in points if groups.get(point.run_id) == status]
+            if selected:
+                axis.scatter(
+                    [point.fn_hz for point in selected],
+                    [point.xi for point in selected],
+                    s=size,
+                    color=color,
+                    alpha=alpha,
+                    label=status,
+                )
+
     @staticmethod
-    def _stable_run_ids(
+    def _grid_code_status_by_run(
         study_analysis: StudyAnalysis | None,
         dynamic_stability_analysis: ContingencyDynamicStabilityAnalysis | None = None,
-    ) -> set[int]:
-        """Return consolidated stable run identifiers, when available."""
+    ) -> dict[int, str]:
+        """Return the scenario Grid Code status for each available run."""
         if dynamic_stability_analysis is not None:
             return {
-                assessment.run_id
+                assessment.run_id: assessment.grid_code_status
                 for assessment in dynamic_stability_analysis.run_assessments
-                if assessment.status == "Stable"
             }
         if study_analysis is None:
-            return set()
-        return set(study_analysis.stable_run_ids)
+            return {}
+        return {
+            run_id: (
+                "Compliant"
+                if study_analysis.status_for_run(run_id) == "Stable"
+                else "Non-compliant"
+                if study_analysis.status_for_run(run_id) == "Unstable"
+                else "Not evaluated"
+            )
+            for run_id in study_analysis.run_ids
+        }
 
     @staticmethod
     def _controller_figure_title(
@@ -1936,10 +1901,10 @@ class AnalysisPipeline:
     ) -> str:
         """Identify the selected-study status used to color controller points."""
         if dynamic_stability_analysis is not None:
-            return f"{title}: global dynamic-stability status"
+            return f"{title}: Grid Code compliance"
         if study_analysis is None:
             return title
-        return f"{title}: consolidated selected-analysis status"
+        return f"{title}: selected-voltage Grid Code status"
 
 
     def analyze_measurement(

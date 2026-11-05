@@ -134,7 +134,7 @@ def export_weighted_pca(analysis, out, result, composition):
     FigureCanvasAgg(fig)
     axes = fig.subplots(2, len(methods), squeeze=False, sharex="row", sharey="row")
     palette = colormaps["tab10"]
-    markers = {"Stable": "o", "Unstable": "X", "Not evaluated": "D"}
+    markers = {"Compliant": "o", "Non-compliant": "X", "Not evaluated": "D"}
     status = np.array([cases[c] for c in ids])
     for row_index, basis in enumerate(("units", "mva")):
         model = fitted[basis]
@@ -156,8 +156,8 @@ def export_weighted_pca(analysis, out, result, composition):
                     if mask.any():
                         axis.scatter(scores[mask, 0], second[mask], marker=markers[state],
                                      s=55, color=palette((c-1) % 10), alpha=.9,
-                                     edgecolor="white" if state == "Stable" else "#222222",
-                                     linewidth=.6, zorder=3 if state == "Stable" else 2)
+                                     edgecolor="white" if state == "Compliant" else "#222222",
+                                     linewidth=.6, zorder=3 if state == "Compliant" else 2)
             legend = axis.legend(
                 handles=[Patch(facecolor=palette((c-1) % 10), label=f"Grupo {c}")
                          for c in range(1, info["k"]+1)],
@@ -166,14 +166,14 @@ def export_weighted_pca(analysis, out, result, composition):
             axis.legend(handles=[
                 Line2D([], [], marker=markers[s], linestyle="none", color="#777777",
                        markeredgecolor="#222222", label=LABELS[s]) for s in present],
-                title="Estabilidad", loc="upper right", fontsize=8)
+                title="Cumplimiento NT", loc="upper right", fontsize=8)
             axis.set(title=f"{name} | grupos de {method}\n"
                            f"PC1 + PC2: {100*(variance[0]+second_variance):.1f} %",
                      xlabel=f"PC1 ponderada ({100*variance[0]:.1f} %)",
                      ylabel=f"PC2 ponderada ({100*second_variance:.1f} %)")
             axis.grid(alpha=.2)
     fig.suptitle("PCA recalculado segun la poblacion de unidades y su potencia\n"
-                 "Color: grupo original | Circulo: estable | X: inestable\n"
+                 "Color: grupo original | Circulo: cumple NT | X: no cumple NT\n"
                  "Los pesos modifican los ejes; las etiquetas de estabilidad no entran al PCA")
     path = out/"06_weighted_pca_projection.png"
     try:

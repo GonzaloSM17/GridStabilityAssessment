@@ -1,6 +1,7 @@
-"""Compare stability-characterization models without a PCA transform.
+"""Compare Grid Code-compliance characterization models without a PCA transform.
 
-Native stability is the observed outcome; predicted probabilities never replace it.
+Observed Grid Code compliance is the outcome; predicted probabilities never
+replace it.
 """
 import argparse
 from collections import defaultdict
@@ -74,11 +75,11 @@ class SelectColumns(TransformerMixin, BaseEstimator):
 def build_inputs(analysis):
     profiles = build_case_profiles(analysis)
     statuses = {c.case_id: c.assessment.status for c in analysis.cases}
-    ids = tuple(c for c in profiles.case_ids if statuses[c] in {"Stable", "Unstable"})
+    ids = tuple(c for c in profiles.case_ids if statuses[c] in {"Compliant", "Non-compliant"})
     excluded = list(profiles.excluded)
-    excluded.extend(dict(case_id=c, reason="Native stability not evaluated")
+    excluded.extend(dict(case_id=c, reason="Grid Code compliance not evaluated")
                     for c in profiles.case_ids if statuses[c] == "Not evaluated")
-    y = np.array([statuses[c] == "Unstable" for c in ids], dtype=int)
+    y = np.array([statuses[c] == "Non-compliant" for c in ids], dtype=int)
     grouped = defaultdict(list)
     for point in analysis.points:
         grouped[point.case_id].append(point)
@@ -299,7 +300,7 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
                 else:
                     path.unlink()
     _csv(out/"excluded_cases.csv", excluded, ["case_id", "reason"])
-    input_rows = [dict(basis=basis, case_id=c, status="Unstable" if y[i] else "Stable",
+    input_rows = [dict(basis=basis, case_id=c, status="Non-compliant" if y[i] else "Compliant",
                       **{name:float(v) if np.isfinite(v) else None
                          for name,v in zip(FEATURE_NAMES, values[i])})
                   for basis, values in matrices.items() for i,c in enumerate(ids)]
@@ -309,8 +310,8 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
     result = compare_models(matrices, y, families=families, repeats=repeats,
         outer_folds=outer_folds, inner_folds=inner_folds, seed=seed, progress=progress)
     metadata = dict(status=result["status"], reason=result["reason"], n_cases=len(ids),
-        stable=int(np.sum(y == 0)), unstable=int(np.sum(y == 1)), excluded=excluded,
-        native_criterion=("Existing voltage + modal damping + angle aggregation, unchanged"
+        compliant=int(np.sum(y == 0)), non_compliant=int(np.sum(y == 1)), excluded=excluded,
+        native_criterion=("Grid Code voltage + modal damping + angle aggregation"
                           if analysis.include_angle else analysis.criterion_description),
         selection_metric="Inner-fold log loss; family and indicator set selected before outer test",
         case_ids=list(ids), feature_sets={key:[FEATURE_NAMES[i] for i in cols] for key,cols in SETS.items()},
@@ -340,8 +341,8 @@ def export_characterization(analysis, output_directory, *, families=FAMILIES, re
                 for i, identifier in enumerate(ids):
                     predictions.append(dict(basis=basis, model=key, repeat=repeat,
                         fold=int(result["fold_ids"][repeat,i]), case_id=identifier,
-                        native_status="Unstable" if y[i] else "Stable",
-                        probability_unstable=float(values[repeat,i]),
+                        native_status="Non-compliant" if y[i] else "Compliant",
+                        probability_non_compliant=float(values[repeat,i]),
                         threshold=float(result["thresholds"][basis][repeat,i]) if key=="nested_selection" else .5))
     _csv(out/"cv_predictions.csv", predictions, list(predictions[0]))
     result["case_ids"] = ids
@@ -425,9 +426,9 @@ def _export_figures(out, matrices, y, result):
             axes[row,1].step(recall,precision,where="post",label=label)
         axes[row,0].plot([0,1],[0,1],color="gray",ls="--")
         axes[row,1].axhline(float(np.mean(y==0)),color="gray",ls="--")
-        axes[row,0].set(title=basis+" | ROC: inestable",xlabel="Falsos positivos",ylabel="Sensibilidad")
-        axes[row,1].set(title=basis+" | Precision-recall: estable",
-                        xlabel="Fraccion de estables detectados",ylabel="Precision para estables")
+        axes[row,0].set(title=basis+" | ROC: no cumple NT",xlabel="Falsos positivos",ylabel="Sensibilidad")
+        axes[row,1].set(title=basis+" | Precision-recall: cumple NT",
+                        xlabel="Fraccion de casos cumple NT detectados",ylabel="Precision para cumple NT")
         for axis in axes[row]:
             axis.legend(fontsize=8)
             axis.grid(alpha=.2)
@@ -451,7 +452,7 @@ def _export_figures(out, matrices, y, result):
             axis.scatter([r["hedges_g"]],[i],c="#4477AA")
         axis.axvline(0,c="gray",lw=1)
         axis.set(title=basis,yticks=range(9),yticklabels=SHORT_FEATURES,
-                 xlabel="Diferencia estandarizada: inestable - estable (Hedges g)")
+                 xlabel="Diferencia estandarizada: no cumple NT - cumple NT (Hedges g)")
         axis.grid(axis="x",alpha=.2)
     _csv(out/"parameter_associations.csv",association_rows,list(association_rows[0]))
     fig.suptitle("Perfil de parametros por estabilidad nativa\n"
@@ -463,8 +464,8 @@ def _export_figures(out, matrices, y, result):
 def _description(result, metadata):
     lines = [
         "# Caracterizacion de estabilidad sin PCA", "",
-        f"Casos: {metadata['n_cases']}; estables: {metadata['stable']}; "
-        f"inestables: {metadata['unstable']}. La etiqueta dinamica original no se cambia.", "",
+        f"Casos: {metadata['n_cases']}; cumple NT: {metadata['compliant']}; "
+        f"no cumple NT: {metadata['non_compliant']}. La etiqueta de cumplimiento no se cambia.", "",
         "Se comparan siete familias (o el subconjunto configurado) sobre diez indicadores, "
         "nueve sin dispersion fn, y nueve mas correlacion xi-fn dentro de cada corrida. "
         "Unidades/MVA modifican los promedios y dispersiones dentro del caso. "
@@ -480,8 +481,8 @@ def _description(result, metadata):
         "El umbral binario de nested_selection se elige por balanced accuracy con predicciones "
         "internas fuera de entrenamiento. Los demas metodos usan 0.5, sin optimizar en el test. "
         "Las probabilidades y predicciones del modelo nunca reemplazan las etiquetas originales.", "",
-        "AUC mide ordenamiento, no porcentaje de aciertos. Stable average precision toma "
-        "estable como clase positiva para evaluar la clase minoritaria. Log loss y Brier: "
+        "AUC mide ordenamiento, no porcentaje de aciertos. Average precision de cumplimiento toma "
+        "cumple NT como clase positiva para evaluar la clase minoritaria. Log loss y Brier: "
         "menor es mejor. El promedio y desviacion entre repeticiones no son un intervalo "
         "de confianza: las particiones comparten corridas. No se atribuye causalidad fisica.", "",
         "Los nueve indicadores surgieron de analisis previos de esta muestra. Esta validacion "
@@ -494,7 +495,7 @@ def _description(result, metadata):
         "permiten leer los perfiles en detalle; TREE_PROFILES.md explica la lectura. "
         "05: diferencias de parametros e intervalos bootstrap por corrida, sin seleccion de "
         "variables ni pruebas multiples a partir de estos intervalos.", "",
-        "| Ponderacion | Procedimiento | AUC | AP estables | Log loss |",
+        "| Ponderacion | Procedimiento | AUC | AP cumple NT | Log loss |",
         "|---|---|---:|---:|---:|",
     ]
     for row in result["summaries"]:

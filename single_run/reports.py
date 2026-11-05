@@ -105,10 +105,11 @@ class SingleRunReport:
             ("Case", "Scenario", self.profile.scenario.name, None),
             ("Case", "Severity", self.profile.scenario.severity, None),
             ("Case", "Fault / clearance [s]", f"{self.profile.scenario.fault_time_s:.3f} / {self.profile.scenario.clearance_time_s:.3f}", None),
-            ("Dynamic Stability", "Assessment", self.dynamic.status, self.dynamic.reason),
-            ("Dynamic Stability", "Voltage criterion", self.dynamic.voltage_status, "All assessed 220/500 kV buses must comply."),
-            ("Dynamic Stability", "EM damping criterion", self.dynamic.modal_damping_status, "See Transfer Assessment for the mode-level trace."),
-            ("Dynamic Stability", "Angular criterion", self.dynamic.angular_status, "COI-referenced machine excursions."),
+            ("Grid Code compliance", "Assessment", self.dynamic.grid_code_status, self.dynamic.grid_code_reason),
+            ("Grid Code compliance", "Voltage criterion", self._grid_code_component_status(self.dynamic.voltage_status), "All assessed 220/500 kV buses must comply."),
+            ("Grid Code compliance", "EM damping criterion", self._grid_code_component_status(self.dynamic.modal_damping_status), "See Transfer Assessment for the mode-level trace."),
+            ("Grid Code compliance", "Angular criterion", self._grid_code_component_status(self.dynamic.angular_status), "COI-referenced machine excursions must remain within the angular limit."),
+            ("Dynamic stability", "Diagnosis", self.dynamic.status, self.dynamic.reason),
             ("Initialization", "Assessed 220/500 kV voltage signals", len(self.initialization.records), None),
             ("Initialization", "Well-initialized voltage signals", initialized_count, None),
             ("Initialization", "Initialization warnings", len(self.initialization.records) - initialized_count, None),
@@ -123,14 +124,14 @@ class SingleRunReport:
             ("Damping", "Not measurable", statuses.count("not_measurable"), None),
             ("Damping", "Not applicable", statuses.count("opened") + statuses.count("inactive_pre_fault"), None),
             ("Damping", "Transfers limiting EM damping", ", ".join(limiting_transfers) or "None", "A limiting mode has damping below 5% or is growing."),
-            ("High frequency", "Transfer warnings", high_frequency_warnings, "Observation only; does not alter dynamic stability."),
+            ("High frequency", "Transfer warnings", high_frequency_warnings, "Observation only; does not alter Grid Code compliance or dynamic stability."),
             ("Angular", "COI-referenced machine excursions", len(self.angular.machines), ANGULAR_REFERENCE_NOTE),
-            ("Angular", "Angular stability", "Stable" if self.angular.is_stable else "Unstable", "All machines must remain strictly within ±120°"),
+            ("Angular", "Angular Grid Code compliance", "Compliant" if self.angular.is_stable else "Non-compliant", "All machines must remain strictly within ±120°"),
             ("Angular", "Machines within ±120°", sum(machine.is_within_limit for machine in self.angular.machines), None),
             ("Angular", "Violating machines", ", ".join(angular_violations) or "None", "Detailed excursions are in Angular Assessment."),
             ("Plant recovery", "Assessed PV/WF/BESS plants", len(self.plant_recovery.records), "Complete P/Q signal pairs only."),
             ("Plant recovery", "Recovered at tmax", len(self.plant_recovery.records) - len(plant_recovery_exceptions), "P and Q both within their terminal tolerance."),
-            ("Plant recovery", "Terminal recovery exceptions", len(plant_recovery_exceptions), "Does not alter the dynamic-stability assessment."),
+            ("Plant recovery", "Terminal recovery exceptions", len(plant_recovery_exceptions), "Observation only; does not alter Grid Code compliance or dynamic stability."),
             ("Plant recovery", "Plants outside terminal tolerance", ", ".join(plant_recovery_names) or "None", "Detailed P/Q values are in Plant Recovery."),
         )
         if self.spatial_stability is not None:
@@ -160,7 +161,16 @@ class SingleRunReport:
         sheet.append(("Bus", "Voltage level [kV]", "Assessment", "0.70 pu compliant", "0.70 pu event", "0.70 pu decision time [s]", "0.70 pu duration [s]", "Below 0.80 pu duration [s]", "0.80 pu compliant", "Settlement compliant", "Final peak error [%]", "Final range [%]", "Fault-on area [pu*s]", "Recovery area [pu*s]", "Unified response area [pu*s]"))
         for item in self.voltage.assessments:
             value = item.assessment
-            sheet.append((item.bus.name, item.voltage_level_kv, "Stable" if value.is_stable else "Unstable", value.is_crisis_voltage_compliant, value.crisis_decision_event, value.crisis_decision_time_s, value.crisis_decision_duration_s, value.cumulative_low_voltage_duration_s, value.is_low_voltage_duration_compliant, value.is_settled, value.final_settlement_peak_absolute_relative_error * 100, value.final_settlement_peak_to_peak_relative_range * 100, value.fault_on_area_pu_s, value.recovery_area_pu_s, value.unified_response_area_pu_s))
+            sheet.append((item.bus.name, item.voltage_level_kv, "Compliant" if value.is_stable else "Non-compliant", value.is_crisis_voltage_compliant, value.crisis_decision_event, value.crisis_decision_time_s, value.crisis_decision_duration_s, value.cumulative_low_voltage_duration_s, value.is_low_voltage_duration_compliant, value.is_settled, value.final_settlement_peak_absolute_relative_error * 100, value.final_settlement_peak_to_peak_relative_range * 100, value.fault_on_area_pu_s, value.recovery_area_pu_s, value.unified_response_area_pu_s))
+
+    @staticmethod
+    def _grid_code_component_status(status: str | None) -> str:
+        """Translate one technical result to its Grid Code compliance meaning."""
+        if status in {"Stable", "Damped"}:
+            return "Compliant"
+        if status in {"Unstable", "Damped under", "Growing"}:
+            return "Non-compliant"
+        return "Not evaluated"
 
     def _write_transfers(self, sheet) -> None:
         sheet.append((

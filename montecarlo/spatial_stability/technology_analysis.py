@@ -1,4 +1,4 @@
-"""Population-weighted PCA coordinates and physical instability grids."""
+"""Population-weighted PCA coordinates and physical Grid Code compliance grids."""
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -87,8 +87,8 @@ def instability_grid(rows, x_edges, y_edges, *, min_cases=5):
     for iy in range(ny):
         for ix in range(nx):
             selected = [r for r, a, b in zip(rows, x, y) if a == ix and b == iy]
-            unstable = sum(r["status"] == "Unstable" for r in selected)
-            stable = sum(r["status"] == "Stable" for r in selected)
+            unstable = sum(r["status"] == "Non-compliant" for r in selected)
+            stable = sum(r["status"] == "Compliant" for r in selected)
             unknown = len(selected) - stable - unstable
             n = stable + unstable
             fraction, lower, upper = None, None, None
@@ -146,7 +146,7 @@ def _draw_grid(axis, cells, xe, ye, *, scope, basis, low_xi_threshold, min_cases
     label = "unidades" if basis == "units" else "potencia MVA"
     weighting = "Cada unidad pesa igual" if basis == "units" else "Cada unidad pesa sus MVA"
     mean_label = "fn promedio simple [Hz]" if basis == "units" else "fn ponderada por MVA [Hz]"
-    axis.set(title=f"{scope} | {weighting}\nn={known}, inestables={rate}",
+    axis.set(title=f"{scope} | {weighting}\nn={known}, no cumple NT={rate}",
              xlabel=f"Fraccion de {label} con xi < {low_xi_threshold:g} (%)",
              ylabel=mean_label)
     return image
@@ -183,7 +183,7 @@ def export_technology_analysis(analysis, out, result, *, low_xi_threshold=.7, mi
                 else:
                     path.unlink()
     mapped_ids={point.case_id for point in analysis.points}
-    evaluated = sum(c.case_id in mapped_ids and c.assessment.status in {"Stable", "Unstable"} for c in analysis.cases)
+    evaluated = sum(c.case_id in mapped_ids and c.assessment.status in {"Compliant", "Non-compliant"} for c in analysis.cases)
     metadata = dict(low_xi_threshold=low_xi_threshold, min_cases=min_cases,
                     total_cases=len(analysis.cases), evaluated_cases=evaluated,
                     pca_cases=len(result["included_case_ids"]), figures=[])
@@ -237,11 +237,11 @@ def export_technology_analysis(analysis, out, result, *, low_xi_threshold=.7, mi
         cells, xe, ye = grids["All", basis]
         image = _draw_grid(axis, cells, xe, ye, scope="Todas las tecnologias", basis=basis,
                           low_xi_threshold=low_xi_threshold, min_cases=min_cases)
-    fig.colorbar(image, ax=axes.tolist(), label="Corridas inestables / evaluadas (%)")
-    fig.suptitle(f"Inestabilidad segun indicadores fisicos de cada corrida\n"
-                 f"Celda: porcentaje y casos inestables/evaluados | Rayado: menos de {min_cases} casos\n"
+    fig.colorbar(image, ax=axes.tolist(), label="Corridas no cumple NT / evaluadas (%)")
+    fig.suptitle(f"Incumplimiento NT segun indicadores fisicos de cada corrida\n"
+                 f"Celda: porcentaje y casos no cumple NT/evaluados | Rayado: menos de {min_cases} casos\n"
                  "Mismos intervalos, distinta ponderacion: las corridas pueden cambiar de celda\n"
-                 "Gris: sin evaluados; cada porcentaje usa casos estables + inestables")
+                 "Gris: sin evaluados; cada porcentaje usa casos cumple NT + no cumple NT")
     save(fig, "07_physical_instability.png")
     technologies = scopes[1:]
     fig = figure(max(12, 5*len(technologies)), 12)
@@ -251,14 +251,14 @@ def export_technology_analysis(analysis, out, result, *, low_xi_threshold=.7, mi
             cells, xe, ye = grids[scope, basis]
             image = _draw_grid(axes[row, col], cells, xe, ye, scope=scope, basis=basis,
                               low_xi_threshold=low_xi_threshold, min_cases=min_cases)
-    fig.colorbar(image, ax=axes.ravel().tolist(), label="Corridas inestables / evaluadas (%)")
-    fig.suptitle("Configuracion por tecnologia frente a la estabilidad del caso completo\n"
-                 f"Celda: porcentaje e inestables/evaluados | Rayado: menos de {min_cases} casos\n"
-                 "Cuartiles propios de cada tecnologia, comunes entre unidades y MVA; no son umbrales de estabilidad")
+    fig.colorbar(image, ax=axes.ravel().tolist(), label="Corridas no cumple NT / evaluadas (%)")
+    fig.suptitle("Configuracion por tecnologia frente al cumplimiento NT del caso completo\n"
+                 f"Celda: porcentaje no cumple NT/evaluados | Rayado: menos de {min_cases} casos\n"
+                 "Cuartiles propios de cada tecnologia, comunes entre unidades y MVA; no son umbrales de cumplimiento")
     save(fig, "08_technology_instability.png")
     metadata.update(
         physical_scope="All mapped cases, including cases incomplete for PCA; absent technologies are not zero-filled",
-        cell_denominator="Stable + Unstable cases; Not evaluated counted separately",
+        cell_denominator="Compliant + Non-compliant cases; Not evaluated counted separately",
         bin_rule="Quartiles of both weighting bases pooled within scope; ties collapsed; lower inclusive, upper exclusive, final upper inclusive",
         unit_definition="A mapped device_id/controller; multiple active controllers sharing an asset share its MVA in native analysis",
         interpretation="Descriptive associations; no causal or predictive claims; xi threshold exploratory",

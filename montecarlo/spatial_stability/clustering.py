@@ -1,6 +1,7 @@
 """Unsupervised case clustering of ten MVA-weighted PLL indicators.
 
-Stability is an outcome for interpretation only, never a fitting feature.
+Grid Code compliance is an outcome for interpretation only, never a fitting
+feature.
 """
 import argparse
 from collections import Counter
@@ -236,7 +237,7 @@ def _export_figures(out, profiles, result, cases):
         title = method
         axis.set(xticks=positions, xlabel="Grupo", ylabel="Numero de corridas", title=title)
         axis.legend(fontsize=8)
-    fig.suptitle("Estabilidad dinamica observada por grupo\n"
+    fig.suptitle("Cumplimiento NT observado por grupo\n"
                  "Las etiquetas se comparan despues del agrupamiento")
     save(fig, "03_cluster_stability.png")
 
@@ -258,7 +259,7 @@ def _export_figures(out, profiles, result, cases):
         if mask.any():
             axes[-1].scatter(scores[mask, 0], y[mask], s=25, alpha=.75,
                              color=COLORS[status], label=LABELS[status])
-    axes[-1].set_title("Estabilidad observada")
+    axes[-1].set_title("Cumplimiento NT observado")
     axes[-1].legend(fontsize=8)
     second = variance[1] if len(variance) > 1 else 0.
     for axis in axes:
@@ -270,10 +271,10 @@ def _export_figures(out, profiles, result, cases):
                  "los grupos se ajustan en sus espacios completos")
     save(fig, "04_pca_projection.png")
 
-    # Keep the same PCA axes and group colors, adding stability by marker shape.
+    # Keep the same PCA axes and group colors, adding compliance by marker shape.
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    markers = {"Stable": "o", "Unstable": "X", "Not evaluated": "D"}
+    markers = {"Compliant": "o", "Non-compliant": "X", "Not evaluated": "D"}
     fig = figure(13, 6)
     axes = np.asarray(fig.subplots(1, len(methods), sharex=True, sharey=True,
                                    squeeze=False)).ravel()
@@ -287,10 +288,10 @@ def _export_figures(out, profiles, result, cases):
                     continue
                 axis.scatter(
                     scores[mask, 0], y[mask],
-                    marker=markers[status], s=60 if status == "Stable" else 65,
+                    marker=markers[status], s=60 if status == "Compliant" else 65,
                     facecolor=palette((c - 1) % 10),
-                    edgecolor="white" if status == "Stable" else "#222222",
-                    linewidth=.65, alpha=.9, zorder=3 if status == "Stable" else 2)
+                    edgecolor="white" if status == "Compliant" else "#222222",
+                    linewidth=.65, alpha=.9, zorder=3 if status == "Compliant" else 2)
         group_handles = [
             Patch(facecolor=palette((c - 1) % 10), label=f"Grupo {c}")
             for c in range(1, info["k"] + 1)]
@@ -302,15 +303,15 @@ def _export_figures(out, profiles, result, cases):
                    markerfacecolor="#888888", markeredgecolor="#222222",
                    markersize=7, label=LABELS[status])
             for status in present]
-        axis.legend(handles=status_handles, title="Forma: estabilidad",
+        axis.legend(handles=status_handles, title="Forma: cumplimiento NT",
                     loc="upper right", fontsize=8, title_fontsize=9)
         axis.set(title=method, xlabel=f"PC1 ({100 * variance[0]:.1f} %)",
                  ylabel=f"PC2 ({100 * second:.1f} %)")
         axis.grid(alpha=.2)
     fig.suptitle(
-        "Grupos y estabilidad dinamica en el mismo plano PCA\n"
-        "Circulo: estable | X: inestable"
-        + (" | Rombo: no evaluado" if "Not evaluated" in present else "")
+        "Grupos y cumplimiento NT en el mismo plano PCA\n"
+        "Circulo: cumple NT | X: no cumple NT"
+        + (" | Rombo: no evaluable" if "Not evaluated" in present else "")
         + f"\nCada punto es una corrida; PC1 + PC2 representa "
           f"{100 * (variance[0] + second):.1f} %")
     save(fig, "05_pca_groups_and_stability.png")
@@ -330,7 +331,7 @@ def pca_description(result):
     lines = [
         "# Que combinan PC1 y PC2", "",
         "Los ejes se calculan con los diez indicadores de cada corrida, no con "
-        "posX/posY ni con las etiquetas de estabilidad.",
+        "posX/posY ni con las etiquetas de cumplimiento NT.",
         "Los ocho promedios y las dos dispersiones ya incorporan sus ponderaciones MVA. "
         "Despues se estandariza cada indicador entre corridas: "
         "z_j = (indicador_j - media_j) / escala_j. "
@@ -374,7 +375,7 @@ def pca_description(result):
         "El signo de una componente puede invertirse sin cambiar la informacion. "
         "Los coeficientes se recalculan para cada estudio; no son constantes fisicas. "
         "Las direcciones describen variacion de parametros, no razones demostradas de "
-        "inestabilidad. La estabilidad solo determina el simbolo del nuevo grafico 05.",
+        "incumplimiento. El cumplimiento NT solo determina el simbolo del nuevo grafico 05.",
         "",
     ]
     return "\n".join(lines)
@@ -414,10 +415,10 @@ def export_clustering(analysis, output_directory, *, low_xi_threshold=.7, min_ce
         p.generator_name.split("_", 1)[0] for p in analysis.points
     } - set(TECHNOLOGIES))
     result["interpretation"] = (
-        "Descriptive exploration, not causal inference or a stability predictor. "
+        "Descriptive exploration, not causal inference or a Grid Code compliance predictor. "
         "Thresholds are heuristics, not significance tests. PCA uses these same ten indicators. "
-        "Stability, IDs, locations, Kp and Ki are not model inputs. "
-        "Unknown stability cases can be clustered but are never counted as stable. "
+        "Grid Code compliance, IDs, locations, Kp and Ki are not model inputs. "
+        "Not-evaluated cases can be clustered but are never counted as compliant. "
         "Cluster numbers are separate for each method. Only complete cases enter clustering; "
         "all included devices, including additional technologies, enter the two spreads."
     )
@@ -444,12 +445,12 @@ def export_clustering(analysis, output_directory, *, low_xi_threshold=.7, min_ce
                 centroid_rows.append(dict(method=method, cluster=c, n_cases=len(indices),
                     **dict(zip(FEATURES, profiles.values[indices].mean(axis=0)))))
                 counts = Counter(a.status for a in selected)
-                known = counts["Stable"] + counts["Unstable"]
+                known = counts["Compliant"] + counts["Non-compliant"]
                 stability_rows.append(dict(
                     method=method, cluster=c, n_cases=len(indices),
-                    stable=counts["Stable"], unstable=counts["Unstable"],
+                    compliant=counts["Compliant"], non_compliant=counts["Non-compliant"],
                     not_evaluated=counts["Not evaluated"],
-                    unstable_fraction_evaluated=counts["Unstable"] / known if known else None,
+                    non_compliant_fraction_evaluated=counts["Non-compliant"] / known if known else None,
                     voltage_failures=sum(a.voltage_status == "Unstable" for a in selected),
                     damping_failures=sum(a.modal_damping_status == "Growing" or
                         (a.angular_status is not None and a.modal_damping_status == "Damped under")

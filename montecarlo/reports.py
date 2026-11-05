@@ -47,7 +47,7 @@ class AnalysisReport:
         summary_sheet = workbook.active
         summary_sheet.title = "Summary"
         initialization_sheet = workbook.create_sheet("Initialization")
-        stability_sheet = workbook.create_sheet("Stability")
+        stability_sheet = workbook.create_sheet("Voltage Compliance")
         definitions_sheet = workbook.create_sheet("Definitions")
         if self.scenario is not None:
             scenario_sheet = workbook.create_sheet("Scenario")
@@ -58,9 +58,9 @@ class AnalysisReport:
         if self.high_frequency_analysis is not None:
             high_frequency_sheet = workbook.create_sheet("High-Frequency Components")
         if self.angular_stability_analysis is not None:
-            angular_sheet = workbook.create_sheet("Angular Stability")
+            angular_sheet = workbook.create_sheet("Angular Compliance")
         if self.spatial_stability is not None:
-            spatial_sheet = workbook.create_sheet("Spatial Stability")
+            spatial_sheet = workbook.create_sheet("Spatial Compliance")
 
         self._write_summary(summary_sheet)
         self._write_initialization(initialization_sheet)
@@ -102,16 +102,18 @@ class AnalysisReport:
         """Write a compact run index; detailed records live in the data sheets."""
         sheet.append((
             "Run",
-            "Contingency Dynamic Stability",
+            "Grid Code Compliance",
+            "Grid Code Reason",
+            "Dynamic Stability Diagnosis",
             "Dynamic Stability Reason",
-            "Voltage Stability",
+            "Voltage Grid Code Compliance",
             "Active-Power Transfer Modal Damping",
             "Worst Dominant EM Damping [%]",
             "Dominant EM Transfer",
             "Lowest EM Mode Damping [%]",
             "Lowest EM Mode Transfer",
             "High-Frequency Components",
-            "Angular Stability",
+            "Angular Grid Code Compliance",
             "Critical Angular Machine",
             "Max Angular Excursion [deg]",
             "First Angular Violation [s]",
@@ -137,9 +139,19 @@ class AnalysisReport:
             spatial_status, spatial_note = self._spatial_status_for_run(run_id)
             sheet.append((
                 self._run_name(run_id),
-                dynamic_stability.status if dynamic_stability is not None else "Not evaluated",
+                (
+                    dynamic_stability.grid_code_status
+                    if dynamic_stability is not None
+                    else "Not evaluated"
+                ),
+                (
+                    dynamic_stability.grid_code_reason
+                    if dynamic_stability is not None
+                    else None
+                ),
+                dynamic_stability.status if dynamic_stability is not None else "Inconclusive",
                 dynamic_stability.reason if dynamic_stability is not None else None,
-                self.study_analysis.status_for_run(run_id),
+                self._voltage_grid_code_status(run_id),
                 damping.status,
                 damping.dominant_damping_percent,
                 damping.dominant_transfer_name,
@@ -172,6 +184,14 @@ class AnalysisReport:
                 spatial_note,
             ))
         self._format_sheet(sheet)
+
+    def _voltage_grid_code_status(self, run_id: int) -> str:
+        """Translate the selected-bus voltage assessment to compliance wording."""
+        status = self.study_analysis.status_for_run(run_id)
+        return {
+            "Stable": "Compliant",
+            "Unstable": "Non-compliant",
+        }.get(status, "Not evaluated")
 
     def _write_transfer_assessments(self, sheet) -> None:
         """Write one database-style assessment row per run and transfer."""
@@ -549,7 +569,7 @@ class AnalysisReport:
                         bus_analysis.bus_name,
                         voltage_analysis.signal_name,
                         self._run_name(result.run_id),
-                        "Stable" if is_stable else "Unstable",
+                        "Compliant" if is_stable else "Non-compliant",
                         ", ".join(stability.failed_criteria) if not is_stable else "-",
                         stability.crisis_decision_time_s,
                         stability.crisis_decision_duration_s,
@@ -670,24 +690,39 @@ class AnalysisReport:
         rows.extend(
             (
                 (
-                    "Contingency Dynamic Stability",
+                    "Grid Code Compliance",
                     "Scope",
-                    "Combined voltage stability, active-power transfer modal damping, and COI-referenced angular stability for the defined contingency.",
+                    "Combined voltage, active-power transfer modal-damping and COI-referenced angular criteria for the defined contingency.",
                 ),
                 (
-                    "Contingency Dynamic Stability",
-                    "Stable",
-                    "Voltage stability and angular stability are Stable, and modal damping is Damped or Damped under. Low positive damping remains Damped under within the Stable group.",
+                    "Grid Code Compliance",
+                    "Compliant",
+                    "Voltage criteria are Compliant, every measurable EM mode is Damped at or above the configured limit, and every machine remains within the angular-separation limit.",
                 ),
                 (
-                    "Contingency Dynamic Stability",
-                    "Unstable",
-                    "Voltage stability is Unstable, active-power transfer modal damping is Growing, or a machine reaches the angular-separation limit. Damped under alone does not make the run Unstable.",
+                    "Grid Code Compliance",
+                    "Non-compliant",
+                    "A voltage criterion fails, an EM mode is Damped under or Growing, or a machine reaches the angular-separation limit.",
                 ),
                 (
-                    "Contingency Dynamic Stability",
+                    "Grid Code Compliance",
                     "Not evaluated",
-                    "No known failure, but voltage, modal damping, or angular stability could not be evaluated.",
+                    "No known Grid Code failure, but voltage, modal damping, or angular evidence could not be evaluated.",
+                ),
+                (
+                    "Dynamic Stability Diagnosis",
+                    "Stable",
+                    "Voltage settles, all angular excursions remain within the limit, and every measurable EM mode is decaying. A Damped under mode remains dynamically stable.",
+                ),
+                (
+                    "Dynamic Stability Diagnosis",
+                    "Unstable",
+                    "Voltage does not settle under the assessment rule, an EM mode is Growing, or a machine reaches the angular-separation limit.",
+                ),
+                (
+                    "Dynamic Stability Diagnosis",
+                    "Inconclusive",
+                    "No known unstable behavior, but voltage, modal damping, or angular evidence could not be evaluated.",
                 ),
                 (
                     "Angular Stability",

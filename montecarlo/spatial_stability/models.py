@@ -1,5 +1,5 @@
-"""Native spatial-controller and stability result models."""
-from dataclasses import dataclass
+"""Native spatial-controller and Grid Code compliance result models."""
+from dataclasses import dataclass, replace
 from pathlib import Path
 from stability.dynamic_stability import DynamicStabilityAssessment
 
@@ -26,6 +26,25 @@ class SpatialCaseAssessment:
     assessment: DynamicStabilityAssessment
     diagnostics: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Expose Grid Code compliance as the spatial classification status.
+
+        Spatial maps, distributions, clustering and characterization predate the
+        separate technical diagnosis and consistently consume ``status``. Keep
+        their data contract intact while retaining the diagnosis in the added
+        ``dynamic_status`` and ``dynamic_reason`` fields of the assessment.
+        """
+        if self.assessment.status != self.assessment.grid_code_status:
+            object.__setattr__(
+                self,
+                "assessment",
+                replace(
+                    self.assessment,
+                    status=self.assessment.grid_code_status,
+                    reason=self.assessment.grid_code_reason,
+                ),
+            )
+
 
 @dataclass(frozen=True)
 class SpatialStabilityAnalysis:
@@ -42,16 +61,11 @@ class SpatialStabilityAnalysis:
 
     @property
     def criterion_description(self):
-        if self.monte_carlo_policy:
-            return (
-                "Monte Carlo: Unstable if voltage is Unstable, modal damping is "
-                "Growing, or angular stability is Unstable; Damped under is "
-                "grouped with Stable."
-            )
-        if self.include_angle:
-            return "Native dynamic stability: voltage + modal damping + angle"
-        return ("Monte Carlo: Unstable if voltage is Unstable or modal damping is Growing; "
-                "Damped under is grouped with Stable; angular criterion is not evaluated")
+        return (
+            "Grid Code compliance: voltage, modal damping and angular criteria "
+            "are all required. Damped under and Growing are non-compliant; "
+            "missing required evidence is not evaluated."
+        )
 
 
 @dataclass(frozen=True)

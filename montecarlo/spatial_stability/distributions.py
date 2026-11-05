@@ -1,7 +1,7 @@
-"""Descriptive parameter distributions grouped by native dynamic stability.
+"""Descriptive parameter distributions grouped by Grid Code compliance.
 
 Case summaries use one observation per run. Population ECDFs normalize MVA
-within each run, then give every run equal weight within its stability class.
+within each run, then give every run equal weight within its compliance class.
 """
 from collections import defaultdict
 from dataclasses import fields
@@ -16,10 +16,10 @@ from stability.dynamic_stability import assess_dynamic_stability, assess_monte_c
 from utils.figure_localization import save_figure_with_spanish_copy
 from .models import SpatialControllerPoint, SpatialCaseAssessment, SpatialStabilityAnalysis, SpatialSkippedRun
 
-STATUSES = ("Stable", "Unstable", "Not evaluated")
-PLOT_STATUSES = ("Stable", "Unstable")
-COLORS = {"Stable":"#0072B2", "Unstable":"#D55E00", "Not evaluated":"#777777"}
-LABELS = {"Stable":"Estable", "Unstable":"Inestable", "Not evaluated":"No evaluado"}
+STATUSES = ("Compliant", "Non-compliant", "Not evaluated")
+PLOT_STATUSES = ("Compliant", "Non-compliant")
+COLORS = {"Compliant":"#0072B2", "Non-compliant":"#D55E00", "Not evaluated":"#777777"}
+LABELS = {"Compliant":"Cumple NT", "Non-compliant":"No cumple NT", "Not evaluated":"No evaluable"}
 
 
 def _csv(path, rows, columns):
@@ -54,7 +54,7 @@ def _validate(analysis):
     if len({(p.case_id,p.device_id) for p in analysis.points})!=len(analysis.points):
         raise ValueError("Duplicate device/case observations")
     for case in cases.values():
-        if case.assessment.status not in STATUSES:raise ValueError("Unknown stability class")
+        if case.assessment.status not in STATUSES:raise ValueError("Unknown Grid Code compliance class")
     for p in analysis.points:
         if not all(isfinite(v) for v in (p.nominal_power_mva,p.xi,p.fn_hz)) or p.nominal_power_mva<=0 or p.fn_hz<=0:
             raise ValueError("Distributions require finite parameters, positive MVA and positive fn")
@@ -146,13 +146,13 @@ def export_case_weighted_means(analysis, output_directory):
     import matplotlib.pyplot as plt
     rows = case_features(analysis)
     statuses = _statuses(rows)
-    out = Path(output_directory)/"distributions_by_stability"
+    out = Path(output_directory)/"distributions_by_grid_code"
     out.mkdir(parents=True,exist_ok=True)
     figure, axes = plt.subplots(1,2,figsize=(12,5),layout="constrained")
     for axis,key,label in zip(axes,("weighted_xi","weighted_fn_hz"),
                               ("xi ponderado por MVA","fn ponderada por MVA [Hz]")):
         _box_panel(axis,rows,key,label,statuses)
-    figure.suptitle("Promedios ponderados por MVA segun estabilidad dinamica\n"
+    figure.suptitle("Promedios ponderados por MVA segun cumplimiento NT\n"
                    "Cada punto es una corrida; igual peso por caso",fontsize=13)
     path = out/"05_case_weighted_means.png"
     try:
@@ -179,7 +179,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
     rows=case_features(analysis,low_xi_threshold,high_fn_threshold_hz)
     tech_rows=technology_features(analysis);curves=population_ecdfs(analysis)
     statuses=_statuses(rows)
-    out=Path(output_directory)/"distributions_by_stability"
+    out=Path(output_directory)/"distributions_by_grid_code"
     out.mkdir(parents=True,exist_ok=True)
     _csv(out/"case_distribution_features.csv",rows,list(rows[0]))
     _csv(out/"technology_case_features.csv",tech_rows,list(tech_rows[0]))
@@ -206,7 +206,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
     for col,(key,label) in enumerate([("weighted_xi","xi ponderado por MVA"),("weighted_fn_hz","fn ponderada por MVA [Hz]")]):
         _ecdf_panel(axes[0,col],rows,key,label,statuses)
         _box_panel(axes[1,col],rows,key,label,statuses)
-    fig.suptitle("Distribuciones por estabilidad dinamica: parametros medios de cada caso\nCada punto es una corrida; igual peso por caso",fontsize=13)
+    fig.suptitle("Distribuciones por cumplimiento NT: parametros medios de cada caso\nCada punto es una corrida; igual peso por caso",fontsize=13)
     save(fig,"01_case_parameter_distributions.png")
     fig,axes=plt.subplots(2,3,figsize=(16,9),layout="constrained")
     specs=[("low_xi_mva_fraction",f"MVA con xi < {low_xi_threshold:g} (%)"),
@@ -216,7 +216,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
         _ecdf_panel(axes[0,col],rows,key,label,statuses,factor=100.)
         _box_panel(axes[1,col],rows,key,label,statuses,factor=100.)
         axes[0,col].set_xlim(0,100);axes[1,col].set_ylim(0,100)
-    fig.suptitle("Distribuciones por estabilidad: composicion de potencia de cada corrida\nUmbrales exploratorios; no definen la etiqueta de estabilidad",fontsize=13)
+    fig.suptitle("Distribuciones por cumplimiento NT: composicion de potencia de cada corrida\nUmbrales exploratorios; no definen la etiqueta de cumplimiento",fontsize=13)
     save(fig,"02_capacity_share_distributions.png")
     fig,axes=plt.subplots(1,2,figsize=(12,5),layout="constrained")
     for ax,metric,label in zip(axes,("xi","fn_hz"),("xi del dispositivo","fn del dispositivo [Hz]")):
@@ -238,7 +238,7 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
         for row,(key,label) in enumerate([("weighted_xi","xi ponderado por MVA"),("weighted_fn_hz","fn ponderada por MVA [Hz]")]):
             _box_panel(axes[row,col],selected,key,label,statuses)
             axes[row,col].set_title(technology)
-    fig.suptitle("Distribuciones por tecnologia y estabilidad dinamica\nCada punto es el promedio ponderado de esa tecnologia en una corrida",fontsize=13)
+    fig.suptitle("Distribuciones por tecnologia y cumplimiento NT\nCada punto es el promedio ponderado de esa tecnologia en una corrida",fontsize=13)
     save(fig,"04_technology_case_distributions.png")
     paths.append(export_case_weighted_means(analysis, output_directory))
     metadata=dict(criterion=analysis.criterion_description,include_angle=analysis.include_angle,monte_carlo_policy=analysis.monte_carlo_policy,counts={s:sum(r["status"]==s for r in rows) for s in STATUSES},
@@ -247,11 +247,11 @@ def export_distributions(analysis, output_directory, *, low_xi_threshold=.7, hig
                   case_weighting="One observation per run; equal run weight, including within each technology",
                   population_ecdf_weighting="For each class: each run has mass 1/n_runs; each active unit has its within-run MVA fraction of that mass",
                   technology_rule="Prefix of GeneratorName before first underscore",low_xi_threshold=low_xi_threshold,high_fn_threshold_hz=high_fn_threshold_hz,
-                  thresholds_interpretation="Exploratory composition indicators, not operational stability limits",
+                  thresholds_interpretation="Exploratory composition indicators, not Grid Code compliance limits",
                   interpretation="Descriptive class comparisons; no causal effects or significance claims. Unit observations within a case are not independent simulation cases.",
                   missing_classes="Retained as empty labeled groups, never replaced by zero-valued cases",figures=[p.name for p in paths])
     (out/"distribution_metadata.json").write_text(json.dumps(metadata,indent=2),encoding="utf-8")
-    (out/"README.md").write_text(f"# Distribuciones por estabilidad\n\n01: ECDF y cajas de xi/fn medios ponderados por MVA de cada corrida. En las cajas, cada punto es un caso; la caja muestra percentiles 25-75 y mediana, los bigotes siguen la regla de 1.5 IQR.\n\n02: ECDF y cajas del porcentaje MVA con xi < {low_xi_threshold:g}, fn >= {high_fn_threshold_hz:g} Hz y ambas condiciones. Son umbrales exploratorios y no cambian el criterio de estabilidad; los valores configurados se registran en distribution_metadata.json.\n\n03: ECDF de los valores de cada dispositivo. Cada caso pesa igual y dentro del caso se pondera por su fraccion de MVA. Es una distribucion descriptiva de capacidad, no miles de corridas independientes.\n\n04: promedios por caso separados por prefijo de tecnologia. Tecnologias ausentes no se reemplazan por cero.\n\n05_case_weighted_means.png: solo las dos cajas con puntos de los promedios globales xi/fn ponderados por MVA, sin ECDF.\n\nAzul: estable; naranja: inestable. Los casos no evaluados se conservan en los CSV pero no se dibujan. Criterio: {analysis.criterion_description}. Los grupos se normalizan independientemente para comparar tamanos distintos. No se dibujan curvas suavizadas ni se calculan pruebas de significancia a partir de unidades repetidas.\n",encoding="utf-8")
+    (out/"README.md").write_text(f"# Distribuciones por cumplimiento NT\n\n01: ECDF y cajas de xi/fn medios ponderados por MVA de cada corrida. En las cajas, cada punto es un caso; la caja muestra percentiles 25-75 y mediana, los bigotes siguen la regla de 1.5 IQR.\n\n02: ECDF y cajas del porcentaje MVA con xi < {low_xi_threshold:g}, fn >= {high_fn_threshold_hz:g} Hz y ambas condiciones. Son umbrales exploratorios y no cambian el criterio de cumplimiento; los valores configurados se registran en distribution_metadata.json.\n\n03: ECDF de los valores de cada dispositivo. Cada caso pesa igual y dentro del caso se pondera por su fraccion de MVA. Es una distribucion descriptiva de capacidad, no miles de corridas independientes.\n\n04: promedios por caso separados por prefijo de tecnologia. Tecnologias ausentes no se reemplazan por cero.\n\n05_case_weighted_means.png: solo las dos cajas con puntos de los promedios globales xi/fn ponderados por MVA, sin ECDF.\n\nAzul: cumple NT; naranja: no cumple NT. Los casos no evaluables se conservan en los CSV pero no se dibujan. Criterio: {analysis.criterion_description}. Los grupos se normalizan independientemente para comparar tamanos distintos. No se dibujan curvas suavizadas ni se calculan pruebas de significancia a partir de unidades repetidas.\n",encoding="utf-8")
     return tuple(paths)
 
 
@@ -298,7 +298,7 @@ def load_saved_analysis(results):
             if row.get("angular_status"):
                 raise ValueError("Monte Carlo labels must not use the angular criterion")
             assessment=assess_monte_carlo_stability(int(row["run_id"]),row["voltage_status"],row["modal_damping_status"])
-        if assessment.status!=row["status"]:raise ValueError("Saved labels differ from the current criterion; rerun spatial analysis")
+        if assessment.grid_code_status!=row["status"]:raise ValueError("Saved labels differ from the current Grid Code criterion; rerun spatial analysis")
         cases.append(SpatialCaseAssessment(row["case_id"],assessment,(row["diagnostics"],) if row.get("diagnostics") else ()))
         if row["case_id"] not in mapped_ids:
             if row.get("spatial_status")!="Skipped":

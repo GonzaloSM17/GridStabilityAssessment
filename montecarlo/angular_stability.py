@@ -228,7 +228,7 @@ class MonteCarloAngularStability:
                     color=colors[status],
                     s=28,
                     alpha=0.80,
-                    label=status,
+                    label=self._angular_compliance_label(status),
                 )
         axis.axhline(
             ANGULAR_LIMIT_DEGREES,
@@ -324,7 +324,7 @@ class MonteCarloAngularStability:
                 color=color,
                 s=28,
                 alpha=0.80,
-                label=f"Official COI status: {status}",
+                label=f"Angular criterion: {self._angular_compliance_label(status)}",
             )
         axis.axhline(
             ANGULAR_LIMIT_DEGREES,
@@ -398,9 +398,18 @@ class MonteCarloAngularStability:
 
         present = {item.status for item in assessments}
         handles = [
-            Line2D([], [], color=color, label=status)
+            Line2D([], [], color=color, label=MonteCarloAngularStability._angular_compliance_label(status))
             for status, color in (("Stable", "#0072B2"), ("Unstable", "#D55E00"))
             if status in present
         ]
         if handles:
             axis.legend(handles=handles, loc="upper left", framealpha=0.92)
+
+    @staticmethod
+    def _angular_compliance_label(status: str) -> str:
+        """Present the angular-limit result without implying global stability."""
+        return {
+            "Stable": "Within angular limit",
+            "Unstable": "Exceeds angular limit",
+            "Not evaluated": "Not evaluated",
+        }.get(status, status)

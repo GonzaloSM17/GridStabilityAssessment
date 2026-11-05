@@ -16,7 +16,7 @@ from .models import SpatialStabilityResult
 from .distributions import PLOT_STATUSES
 
 FN_LABELS = ("0-2 Hz", "2-5 Hz", "5-10 Hz", "10-20 Hz", ">=20 Hz")
-STATUS_DIRECTORIES = {"Stable": "stable", "Unstable": "unstable", "Not evaluated": "not_evaluated"}
+STATUS_DIRECTORIES = {"Compliant": "compliant", "Non-compliant": "non_compliant", "Not evaluated": "not_evaluated"}
 
 
 def _write_csv(path, rows, columns):
@@ -109,7 +109,7 @@ def _draw_mean_comparison(
     stable_count,
     unstable_count,
 ):
-    """Draw Stable and Unstable class means side by side on shared map scales."""
+    """Draw compliant and non-compliant class means on shared map scales."""
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
@@ -137,8 +137,8 @@ def _draw_mean_comparison(
         for value in sizes
     ]
     for axis, status, points, count in (
-        (axes[0], "Stable", stable_points, stable_count),
-        (axes[1], "Unstable", unstable_points, unstable_count),
+        (axes[0], "Compliant", stable_points, stable_count),
+        (axes[1], "Non-compliant", unstable_points, unstable_count),
     ):
         visible = points if points else universe
         axis.scatter(
@@ -186,9 +186,9 @@ def _draw_mean_comparison(
         ncols=len(handles), fontsize=8,
     )
     title = (
-        "Mean PLL damping ratio by dynamic-stability class"
+        "Mean PLL damping ratio by Grid Code compliance class"
         if metric == "xi"
-        else "Mean PLL natural-frequency band by dynamic-stability class"
+        else "Mean PLL natural-frequency band by Grid Code compliance class"
     )
     figure.suptitle(
         f"{title}\nPer-unit mean across available active cases; common position, size and colour scales",
@@ -250,7 +250,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
     mapped_case_ids = {point.case_id for point in points}
     if not mapped_case_ids.issubset(case_map): raise ValueError("Controller/assessment case mismatch")
     for case in cases:
-        if case.assessment.status not in STATUS_DIRECTORIES: raise ValueError("Unknown dynamic-stability status")
+        if case.assessment.status not in STATUS_DIRECTORIES: raise ValueError("Unknown Grid Code compliance status")
     names = [_filename(case.case_id) for case in cases]
     if len(names) != len(set(names)): raise ValueError("Run names collide after filename normalization")
     scale_points = tuple(p for p in points if case_map[p.case_id].assessment.status in PLOT_STATUSES) or points
@@ -302,44 +302,44 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
         mean_xi_values or list(xi_limits)
     )
     mean_xi_limits = (mean_xi_lower, mean_xi_upper)
-    stable_rows = {row["device_id"]: row for row in groups["Stable"][2]}
-    unstable_rows = {row["device_id"]: row for row in groups["Unstable"][2]}
+    stable_rows = {row["device_id"]: row for row in groups["Compliant"][2]}
+    unstable_rows = {row["device_id"]: row for row in groups["Non-compliant"][2]}
     comparison = []
     for device in sorted(set(stable_rows) | set(unstable_rows)):
         a, b = stable_rows.get(device), unstable_rows.get(device)
         comparison.append(dict(device_id=device,
-            n_stable=a["n_cases"] if a else 0, n_unstable=b["n_cases"] if b else 0,
-            mean_xi_stable=a["mean_xi"] if a else None, mean_xi_unstable=b["mean_xi"] if b else None,
-            delta_xi_unstable_minus_stable=b["mean_xi"]-a["mean_xi"] if a and b else None,
-            mean_fn_hz_stable=a["mean_fn_hz"] if a else None, mean_fn_hz_unstable=b["mean_fn_hz"] if b else None,
-            delta_fn_hz_unstable_minus_stable=b["mean_fn_hz"]-a["mean_fn_hz"] if a and b else None,
-            fn_band_stable=a["frequency_band"] if a else None, fn_band_unstable=b["frequency_band"] if b else None,
+            n_compliant=a["n_cases"] if a else 0, n_non_compliant=b["n_cases"] if b else 0,
+            mean_xi_compliant=a["mean_xi"] if a else None, mean_xi_non_compliant=b["mean_xi"] if b else None,
+            delta_xi_non_compliant_minus_compliant=b["mean_xi"]-a["mean_xi"] if a and b else None,
+            mean_fn_hz_compliant=a["mean_fn_hz"] if a else None, mean_fn_hz_non_compliant=b["mean_fn_hz"] if b else None,
+            delta_fn_hz_non_compliant_minus_compliant=b["mean_fn_hz"]-a["mean_fn_hz"] if a and b else None,
+            fn_band_compliant=a["frequency_band"] if a else None, fn_band_non_compliant=b["frequency_band"] if b else None,
             same_fn_band=a["frequency_band"] == b["frequency_band"] if a and b else None))
-    comparison_columns = ["device_id","n_stable","n_unstable","mean_xi_stable","mean_xi_unstable",
-        "delta_xi_unstable_minus_stable","mean_fn_hz_stable","mean_fn_hz_unstable",
-        "delta_fn_hz_unstable_minus_stable","fn_band_stable","fn_band_unstable","same_fn_band"]
+    comparison_columns = ["device_id","n_compliant","n_non_compliant","mean_xi_compliant","mean_xi_non_compliant",
+        "delta_xi_non_compliant_minus_compliant","mean_fn_hz_compliant","mean_fn_hz_non_compliant",
+        "delta_fn_hz_non_compliant_minus_compliant","fn_band_compliant","fn_band_non_compliant","same_fn_band"]
     _write_csv(out/"device_class_comparison.csv",comparison,comparison_columns)
     figures, summary = [], []
-    report(f"Spatial stability: saved controller values and classifications in {out}")
+    report(f"Spatial Grid Code compliance: saved controller values and classifications in {out}")
     from .distributions import export_distributions
-    report("Spatial stability: creating distributions by stability")
+    report("Spatial Grid Code compliance: creating distributions by compliance")
     distribution_paths = export_distributions(analysis, out)
     figures.extend(distribution_paths)
     report(f"Spatial stability: saved {len(distribution_paths)} distribution figure(s)")
-    report("Spatial stability: creating mean maps by stability")
+    report("Spatial Grid Code compliance: creating mean maps by compliance")
     columns = ["device_id","generator_name","asset_name","x","y","mva","n_cases","n_cases_in_class","mean_xi","mean_fn_hz","frequency_band"]
     for metric, folder_name, prefix in (("xi","xi_maps","xi"),("fn_hz","fn_maps","fn")):
         directory = out/folder_name
-        old_unknown_map = directory/"by_stability"/"not_evaluated"/f"{prefix}_mean_map.png"
+        old_unknown_map = directory/"by_grid_code"/"not_evaluated"/f"{prefix}_mean_map.png"
         if old_unknown_map.is_file():
             remove_figure_with_spanish_copy(old_unknown_map)
         for status, status_folder in STATUS_DIRECTORIES.items():
             selected_cases, averages, rows = groups[status]
-            # Always represent Stable/Unstable, and create an unknown class only when it exists.
+            # Always represent Compliant/Non-compliant, and create an unknown class only when it exists.
             if status == "Not evaluated" and not selected_cases:
                 summary.append(dict(metric=metric,status=status,n_cases=0,weighted_population_mean=None))
                 continue
-            folder = directory/"by_stability"/status_folder
+            folder = directory/"by_grid_code"/status_folder
             folder.mkdir(parents=True,exist_ok=True)
             _write_csv(folder/"device_means.csv", rows, columns)
             membership = [row for row in case_rows if row["case_id"] in selected_cases]
@@ -356,8 +356,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             if old_map.is_file():
                 remove_figure_with_spanish_copy(old_map)
         figure = _draw_mean_comparison(
-            groups["Stable"][1],
-            groups["Unstable"][1],
+            groups["Compliant"][1],
+            groups["Non-compliant"][1],
             universe,
             metric,
             bounds,
@@ -365,15 +365,15 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             mean_xi_ticks if metric == "xi" else xi_ticks,
             fn_edges,
             size_factor,
-            len(groups["Stable"][0]),
-            len(groups["Unstable"][0]),
+            len(groups["Compliant"][0]),
+            len(groups["Non-compliant"][0]),
         )
         path = directory/f"{prefix}_mean_map.png"
         try: save_figure_with_spanish_copy(figure, path, dpi=150)
         finally: plt.close(figure)
         figures.append(path)
-    _write_csv(out/"stability_group_summary.csv", summary, list(summary[0]))
-    report("Spatial stability: mean maps by stability saved")
+    _write_csv(out/"grid_code_group_summary.csv", summary, list(summary[0]))
+    report("Spatial Grid Code compliance: mean maps by compliance saved")
     from .clustering import export_clustering
     report("Spatial stability: creating clustering and PCA figures")
     clustering_paths = export_clustering(analysis, out)
@@ -398,7 +398,7 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
             value = row["weighted_xi" if metric=="xi" else "weighted_fn_hz"]
             units = " Hz" if metric=="fn_hz" else ""
             figure = _draw(selected,universe,metric,f"Run {case.case_id}: {'xi' if metric=='xi' else 'natural frequency'}",
-                           f"Dynamic stability: {case.assessment.status} ({criterion_label})\n"
+                           f"Grid Code compliance: {case.assessment.status} ({criterion_label})\n"
                            f"MVA-weighted included population = {value:.3f}{units}", bounds,xi_limits,xi_ticks,fn_edges,size_factor)
             path = directory/"by_case"/f"{prefix}_map_{_filename(case.case_id)}.png"
             try: save_figure_with_spanish_copy(figure, path, dpi=150)
@@ -426,8 +426,8 @@ def export_maps(analysis, output_directory, assets, profile, runs, *, progress=N
                     xi_color_limits=list(xi_limits),xi_color_ticks=list(xi_ticks),xi_mean_color_limits=list(mean_xi_limits),xi_mean_color_ticks=list(mean_xi_ticks),frequency_color_edges=fn_edges,position_bounds=bounds,marker_area_per_mva=size_factor,
                     group_membership={status:sorted(group[0]) for status,group in groups.items()},
                     weighting="Point area proportional to MVA; repeated active controllers share asset MVA. Equal case weight per active unit for class means. Population mean weighted by MVA per run then equally across runs.",
-                    missing_data="Missing evidence is retained as Not evaluated according to native aggregation; not included in Stable means. Excluded coordinates/assets listed in excluded_devices.csv.",
-                    distributions="distributions_by_stability/: descriptive comparisons with equal case weights",
+                    missing_data="Missing evidence is retained as Not evaluated; it is not included in Compliant means. Excluded coordinates/assets listed in excluded_devices.csv.",
+                    distributions="distributions_by_grid_code/: descriptive comparisons with equal case weights",
                     scope="All active Kp/Ki controllers with mapped coordinates, including constant gains; positions are schematic and are not used as geographic distances.")
     (out/"spatial_metadata.json").write_text(json.dumps(metadata,indent=2,ensure_ascii=False),encoding="utf-8")
     return SpatialStabilityResult(out,analysis,tuple(figures))
