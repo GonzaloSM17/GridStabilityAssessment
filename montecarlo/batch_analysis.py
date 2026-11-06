@@ -2049,9 +2049,12 @@ class AnalysisPipeline:
         from matplotlib.colors import TwoSlopeNorm
 
         groups = (
-            ("Well-initialized runs", set(analysis.well_initialized_run_ids)),
             (
-                "Poorly initialized runs",
+                "Runs with satisfactory initialization",
+                set(analysis.well_initialized_run_ids),
+            ),
+            (
+                "Runs with unsatisfactory initialization",
                 set(analysis.unsettled_initialization_run_ids),
             ),
         )

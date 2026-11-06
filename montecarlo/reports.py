@@ -46,7 +46,7 @@ class AnalysisReport:
         workbook = Workbook()
         summary_sheet = workbook.active
         summary_sheet.title = "Summary"
-        compliance_summary_sheet = workbook.create_sheet("Compliance Summary", 0)
+        compliance_summary_sheet = workbook.create_sheet("Resumen Cumplimiento NT", 0)
         initialization_sheet = workbook.create_sheet("Initialization")
         stability_sheet = workbook.create_sheet("Voltage Compliance")
         definitions_sheet = workbook.create_sheet("Definitions")
@@ -83,6 +83,7 @@ class AnalysisReport:
         workbook.save(output_path)
         workbook.close()
         self._write_grid_code_compliance_pie(output_path.parent)
+        self._write_spanish_compliance_summary(output_path.parent)
         return output_path
 
     def _write_scenario(self, sheet) -> None:
@@ -189,64 +190,78 @@ class AnalysisReport:
         self._format_sheet(sheet)
 
     def _write_compliance_summary(self, sheet) -> None:
-        """Write the executive per-criterion Grid Code compliance summary."""
-        run_ids = self.study_analysis.run_ids
-        total_runs = len(run_ids)
-        sheet.append(("Criterion", "Classification", "Number of runs", "Percentage"))
+        """Write the executive Grid Code compliance summary in Spanish."""
+        total_runs = len(self.study_analysis.run_ids)
+        sheet.append(("Criterio", "Clasificación", "N.º de casos", "Porcentaje"))
         if not total_runs:
             self._format_sheet(sheet)
             return
-
-        categories = (
-            (
-                "Initialization",
-                tuple(
-                    self._initialization_summary_status(run_id)
-                    for run_id in run_ids
-                ),
-                ("Well initialized", "Initialization warning", "Not evaluated"),
-            ),
-            (
-                "Voltage Grid Code compliance",
-                tuple(self._voltage_grid_code_status(run_id) for run_id in run_ids),
-                ("Compliant", "Non-compliant", "Not evaluated"),
-            ),
-            (
-                "Transfer modal damping",
-                tuple(
-                    self._damping_summary_classification(run_id)
-                    for run_id in run_ids
-                ),
-                (
-                    "Compliant — Damped (xi >= 5%)",
-                    "Non-compliant — Damped under (0 < xi < 5%)",
-                    "Non-compliant — Growing",
-                    "Not evaluated",
-                ),
-            ),
-            (
-                "Angular separation",
-                tuple(self._angular_summary_classification(run_id) for run_id in run_ids),
-                (
-                    "Compliant — Within angular limit",
-                    "Non-compliant — Exceeds angular limit",
-                    "Not evaluated",
-                ),
-            ),
-            (
-                "Overall Grid Code compliance",
-                tuple(self._grid_code_status_for_run(run_id) for run_id in run_ids),
-                ("Compliant", "Non-compliant", "Not evaluated"),
-            ),
-        )
-        for criterion, statuses, order in categories:
-            for classification in order:
-                count = statuses.count(classification)
-                sheet.append((criterion, classification, count, count / total_runs))
-        sheet.append(("Study", "Total selected runs", total_runs, 1.0))
+        for row in self._compliance_summary_rows():
+            sheet.append(row)
+        sheet.append(("Estudio", "Total de casos seleccionados", total_runs, 1.0))
         self._format_sheet(sheet)
         for cell in sheet["D"][1:]:
             cell.number_format = "0.0%"
+
+    def _compliance_summary_rows(self) -> tuple[tuple[str, str, int, float], ...]:
+        """Return the Spanish executive totals used by Excel and Word."""
+        run_ids = self.study_analysis.run_ids
+        total_runs = len(run_ids)
+        if not total_runs:
+            return ()
+        categories = (
+            (
+                "Inicialización",
+                tuple(self._initialization_summary_status(run_id) for run_id in run_ids),
+                ("Satisfactoria", "No satisfactoria", "No evaluada"),
+            ),
+            (
+                "Cumplimiento de tensión",
+                tuple(
+                    {
+                        "Compliant": "Cumple NT",
+                        "Non-compliant": "No cumple NT",
+                    }.get(self._voltage_grid_code_status(run_id), "No evaluada")
+                    for run_id in run_ids
+                ),
+                ("Cumple NT", "No cumple NT", "No evaluada"),
+            ),
+            (
+                "Amortiguamiento modal de transferencias",
+                tuple(self._damping_summary_classification(run_id) for run_id in run_ids),
+                (
+                    "Cumple NT — Amortiguado (ξ ≥ 5%)",
+                    "No cumple NT — Amortiguado bajo (0% < ξ < 5%)",
+                    "No cumple NT — Creciente (ξ ≤ 0%)",
+                    "No evaluada",
+                ),
+            ),
+            (
+                "Separación angular",
+                tuple(self._angular_summary_classification(run_id) for run_id in run_ids),
+                (
+                    "Cumple NT — Dentro del límite angular",
+                    "No cumple NT — Supera el límite angular",
+                    "No evaluada",
+                ),
+            ),
+            (
+                "Cumplimiento NT global",
+                tuple(
+                    {
+                        "Compliant": "Cumple NT",
+                        "Non-compliant": "No cumple NT",
+                    }.get(self._grid_code_status_for_run(run_id), "No evaluada")
+                    for run_id in run_ids
+                ),
+                ("Cumple NT", "No cumple NT", "No evaluada"),
+            ),
+        )
+        return tuple(
+            (criterion, classification, statuses.count(classification), statuses.count(classification) / total_runs)
+            for criterion, statuses, order in categories
+            for classification in order
+        )
 
     def _initialization_summary_status(self, run_id: int) -> str:
         """Consolidate initialization across the selected voltage buses."""
@@ -261,27 +276,45 @@ class AnalysisReport:
                 None,
             )
             if result is None:
-                return "Not evaluated"
+                return "No evaluada"
             initialized.append(result.initialization.is_well_initialized)
-        return "Well initialized" if all(initialized) else "Initialization warning"
+        return "Satisfactoria" if all(initialized) else "No satisfactoria"
 
     def _damping_summary_classification(self, run_id: int) -> str:
         """Express transfer modal damping using compliance-oriented categories."""
         return {
-            "Damped": "Compliant — Damped (xi >= 5%)",
-            "Damped under": "Non-compliant — Damped under (0 < xi < 5%)",
-            "Growing": "Non-compliant — Growing",
-        }.get(self._transfer_damping_summary_for_run(run_id).status, "Not evaluated")
+            "Damped": "Cumple NT — Amortiguado (ξ ≥ 5%)",
+            "Damped under": "No cumple NT — Amortiguado bajo (0% < ξ < 5%)",
+            "Growing": "No cumple NT — Creciente (ξ ≤ 0%)",
+        }.get(self._transfer_damping_summary_for_run(run_id).status, "No evaluada")
 
     def _angular_summary_classification(self, run_id: int) -> str:
         """Express the local angular limit as a compliance category."""
         if self.angular_stability_analysis is None:
-            return "Not evaluated"
+            return "No evaluada"
         status = self.angular_stability_analysis.status_for_run(run_id)
         return {
-            "Stable": "Compliant — Within angular limit",
-            "Unstable": "Non-compliant — Exceeds angular limit",
-        }.get(status, "Not evaluated")
+            "Stable": "Cumple NT — Dentro del límite angular",
+            "Unstable": "No cumple NT — Supera el límite angular",
+        }.get(status, "No evaluada")
+
+    def _write_spanish_compliance_summary(self, output_directory: Path) -> Path:
+        """Write the executive Spanish Word summary beside the Excel report."""
+        from utils.word_document import write_compliance_summary_document
+
+        scenario_name = self.scenario.name if self.scenario is not None else "Escenario evaluado"
+        return write_compliance_summary_document(
+            output_directory / "resumen_cumplimiento_nt.docx",
+            title="Resumen de cumplimiento de la Norma Técnica",
+            subtitle=scenario_name,
+            rows=self._compliance_summary_rows(),
+            total_cases=len(self.study_analysis.run_ids),
+            notes=(
+                "El cumplimiento NT global integra los criterios de tensión, amortiguamiento modal de transferencias y separación angular.",
+                "Una inicialización no satisfactoria excluye el caso de los análisis posteriores y lo deja como No evaluado para el cumplimiento NT global.",
+                "La figura grid_code_compliance_distribution_ES.png presenta la distribución global de cumplimiento NT.",
+            ),
+        )
 
     def _grid_code_status_for_run(self, run_id: int) -> str:
         """Return the consolidated Grid Code status or its explicit absence."""
@@ -686,9 +719,9 @@ class AnalysisReport:
                         voltage_analysis.signal_name,
                         self._run_name(result.run_id),
                         (
-                            "Well initialized"
+                            "Satisfactory initialization"
                             if initialization.is_well_initialized
-                            else "Poorly initialized"
+                            else "Unsatisfactory initialization"
                         ),
                         initialization.fast_relative_error_percentile_99 * 100,
                         criteria.maximum_fast_relative_error_percentile_99 * 100,

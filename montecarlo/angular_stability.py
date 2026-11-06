@@ -119,7 +119,7 @@ class MonteCarloAngularStability:
                         run.run_id,
                         "Not evaluated",
                         None,
-                        "Initialization warning: downstream analysis excluded.",
+                        "Unsatisfactory initialization: downstream analysis excluded.",
                     )
                 )
                 continue

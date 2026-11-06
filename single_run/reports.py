@@ -111,8 +111,8 @@ class SingleRunReport:
             ("Grid Code compliance", "Angular criterion", self._grid_code_component_status(self.dynamic.angular_status), "COI-referenced machine excursions must remain within the angular limit."),
             ("Dynamic stability", "Diagnosis", self.dynamic.status, self.dynamic.reason),
             ("Initialization", "Assessed 220/500 kV voltage signals", len(self.initialization.records), None),
-            ("Initialization", "Well-initialized voltage signals", initialized_count, None),
-            ("Initialization", "Initialization warnings", len(self.initialization.records) - initialized_count, None),
+            ("Initialization", "Satisfactory initialization signals", initialized_count, None),
+            ("Initialization", "Unsatisfactory initialization signals", len(self.initialization.records) - initialized_count, None),
             ("Voltage", "220/500 kV assessed buses", voltage_total, None),
             ("Voltage", "Buses passing all active criteria", voltage_stable, None),
             ("Voltage", "Buses failing one or more criteria", voltage_total - voltage_stable, None),
@@ -155,7 +155,7 @@ class SingleRunReport:
         sheet.append(("Bus", "Voltage level [kV]", "Reference voltage [pu]", "P99 fast error [%]", "Fast RMS error [%]", "Assessment", "Reason"))
         for item in self.initialization.records:
             value = item.assessment
-            sheet.append((item.bus.name, item.voltage_level_kv, value.reference_value, value.fast_relative_error_percentile_99 * 100, value.fast_rms_relative_error * 100, "Well initialized" if value.is_well_initialized else "Warning", ", ".join(value.rejection_reasons) or None))
+            sheet.append((item.bus.name, item.voltage_level_kv, value.reference_value, value.fast_relative_error_percentile_99 * 100, value.fast_rms_relative_error * 100, "Satisfactory initialization" if value.is_well_initialized else "Unsatisfactory initialization", ", ".join(value.rejection_reasons) or None))
 
     def _write_voltage(self, sheet) -> None:
         sheet.append(("Bus", "Voltage level [kV]", "Assessment", "0.70 pu compliant", "0.70 pu event", "0.70 pu decision time [s]", "0.70 pu duration [s]", "Below 0.80 pu duration [s]", "0.80 pu compliant", "Settlement compliant", "Final peak error [%]", "Final range [%]", "Fault-on area [pu*s]", "Recovery area [pu*s]", "IDD area [pu*s]", "IDD window end [s]", "IDD Grid Code limit [pu*s]"))

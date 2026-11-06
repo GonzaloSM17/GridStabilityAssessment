@@ -113,7 +113,7 @@ class CharacterizationTests(unittest.TestCase):
             meta=json.loads((out/"characterization_metadata.json").read_text())
             self.assertEqual(meta["n_cases"],32)
             self.assertEqual(meta["native_criterion"],
-                             "Existing voltage + modal damping + angle aggregation, unchanged")
+                             "Grid Code voltage + modal damping + angle aggregation")
             single=replace(analysis,cases=analysis.cases[:1],
                            points=tuple(p for p in analysis.points if p.case_id==analysis.cases[0].case_id))
             self.assertEqual(export_characterization(single,base),())

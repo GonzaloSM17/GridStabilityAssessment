@@ -134,8 +134,8 @@ class SingleRunInitialization:
             axis.spines["right"].set_visible(False)
         figure.legend(
             handles=(
-                Line2D((), (), color="#009E73", label="Well initialized"),
-                Line2D((), (), color="#D73027", label="Initialization warning"),
+                Line2D((), (), color="#009E73", label="Satisfactory initialization"),
+                Line2D((), (), color="#D73027", label="Unsatisfactory initialization"),
                 Line2D((), (), color="#F0B323", linewidth=7, alpha=0.35, label="Evaluation window"),
             ),
             loc="lower center",
