@@ -344,10 +344,38 @@ class StudyAnalysis:
             run_id for run_id in self.run_ids if self.status_for_run(run_id) == "Stable"
         )
 
+    @property
+    def initialization_eligible_run_ids(self) -> tuple[int, ...]:
+        """Return runs whose every selected voltage signal passed initialization.
+
+        This is the official analysis gate.  A failed pre-contingency voltage
+        initialization invalidates the downstream contingency evidence for the
+        complete run, rather than only the local voltage conclusion.
+        """
+        return tuple(
+            run_id
+            for run_id in self.run_ids
+            if all(
+                result is not None and result.initialization.is_well_initialized
+                for _, result in self._results_for_run(run_id)
+            )
+        )
+
+    @property
+    def initialization_blocked_run_ids(self) -> tuple[int, ...]:
+        """Return runs excluded from official post-initialization analyses."""
+        eligible = set(self.initialization_eligible_run_ids)
+        return tuple(run_id for run_id in self.run_ids if run_id not in eligible)
+
     def status_for_run(self, run_id: int) -> str:
         """Return the consolidated status across all selected buses for one run."""
         results = self._results_for_run(run_id)
-        if any(result is None or result.stability is None for _, result in results):
+        if any(
+            result is None
+            or not result.initialization.is_well_initialized
+            or result.stability is None
+            for _, result in results
+        ):
             return "Not evaluated"
         if any(not result.stability.is_stable for _, result in results):
             return "Unstable"
@@ -431,10 +459,16 @@ class AnalysisPipeline:
         """Expose the study Assets metadata to controller analysis."""
         return self.study.assets
 
-    def analyze_controllers(self) -> ControllerStudyAnalysis:
+    def analyze_controllers(
+        self,
+        *,
+        run_ids: tuple[int, ...] | None = None,
+    ) -> ControllerStudyAnalysis:
         """Collect individual and nominal-power-weighted controller points."""
         if self.assets is None:
             raise ValueError("Controller analysis requires an Assets workbook.")
+
+        selected_run_ids = set(run_ids) if run_ids is not None else None
 
         controller_points: list[ControllerPoint] = []
         weighted_run_points: list[WeightedControllerPoint] = []
@@ -442,6 +476,8 @@ class AnalysisPipeline:
         skipped_run_reasons: list[tuple[int, str]] = []
 
         for run in self.context.runs:
+            if selected_run_ids is not None and run.run_id not in selected_run_ids:
+                continue
             try:
                 controllers = run.read_active_controller_parameters(self.assets)
             except (FileNotFoundError, KeyError, ValueError) as error:
@@ -491,13 +527,18 @@ class AnalysisPipeline:
     def analyze_power_transfers(
         self,
         criteria: DampingCriteria | None = None,
+        *,
+        run_ids: tuple[int, ...] | None = None,
     ) -> TransferStudyAnalysis:
         """Assess every explicitly published active-power transfer in every run."""
         criteria = criteria or self.profile.transfer_damping_criteria
         transfers = order_power_transfers_north_to_south(self.study.power_transfers)
         columns = tuple(transfer.column_name for transfer in transfers)
         assessments = []
+        selected_run_ids = set(run_ids) if run_ids is not None else None
         for run in self.context.runs:
+            if selected_run_ids is not None and run.run_id not in selected_run_ids:
+                continue
             if run.dataset is None:
                 continue
             try:
@@ -528,14 +569,20 @@ class AnalysisPipeline:
     ) -> ContingencyDynamicStabilityAnalysis:
         """Combine voltage, damping and angle into NT compliance and diagnosis."""
         assessments = []
+        initialization_eligible_run_ids = set(study_analysis.initialization_eligible_run_ids)
         for run_id in study_analysis.run_ids:
-            voltage_status = study_analysis.status_for_run(run_id)
-            modal_damping_status = transfer_analysis.modal_damping_status_for_run(run_id)
-            angular_status = (
-                angular_analysis.status_for_run(run_id)
-                if angular_analysis is not None
-                else None
-            )
+            if run_id not in initialization_eligible_run_ids:
+                voltage_status = "Not evaluated"
+                modal_damping_status = "Not evaluated"
+                angular_status = "Not evaluated"
+            else:
+                voltage_status = study_analysis.status_for_run(run_id)
+                modal_damping_status = transfer_analysis.modal_damping_status_for_run(run_id)
+                angular_status = (
+                    angular_analysis.status_for_run(run_id)
+                    if angular_analysis is not None
+                    else None
+                )
             assessments.append(
                 assess_monte_carlo_stability(
                     run_id,
@@ -549,6 +596,8 @@ class AnalysisPipeline:
     def detect_high_frequency_transfer_components(
         self,
         criteria: HighFrequencyCriteria | None = None,
+        *,
+        run_ids: tuple[int, ...] | None = None,
     ) -> HighFrequencyStudyAnalysis:
         """Observe spectral transfer content above the EM damping band.
 
@@ -559,7 +608,10 @@ class AnalysisPipeline:
         transfers = order_power_transfers_north_to_south(self.study.power_transfers)
         columns = tuple(transfer.column_name for transfer in transfers)
         assessments = []
+        selected_run_ids = set(run_ids) if run_ids is not None else None
         for run in self.context.runs:
+            if selected_run_ids is not None and run.run_id not in selected_run_ids:
+                continue
             if run.dataset is None:
                 continue
             try:
@@ -607,7 +659,14 @@ class AnalysisPipeline:
         columns = tuple(transfer.column_name for transfer in transfers)
         column_values = {column: [] for column in columns}
         time_values = None
+        selected_run_ids = (
+            {assessment.run_id for assessment in transfer_analysis.assessments}
+            if transfer_analysis is not None
+            else None
+        )
         for run in self.context.runs:
+            if selected_run_ids is not None and run.run_id not in selected_run_ids:
+                continue
             if run.dataset is None:
                 continue
             try:

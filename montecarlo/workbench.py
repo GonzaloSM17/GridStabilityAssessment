@@ -193,8 +193,21 @@ class MonteCarloWorkbench:
         )
         study_analysis = StudyAnalysis(bus_analyses)
         logger.info("Selected-bus voltage analysis completed")
+        eligible_run_ids = study_analysis.initialization_eligible_run_ids
+        blocked_run_ids = study_analysis.initialization_blocked_run_ids
+        logger.info(
+            "Initialization gate: %d eligible, %d excluded from downstream analysis",
+            len(eligible_run_ids),
+            len(blocked_run_ids),
+        )
+        if blocked_run_ids:
+            logger.warning(
+                "Initialization gate excluded %d run(s): %s",
+                len(blocked_run_ids),
+                ", ".join(f"run_{run_id:06d}" for run_id in blocked_run_ids),
+            )
         logger.info("Starting controller population analysis")
-        controller_analysis = self.pipeline.analyze_controllers()
+        controller_analysis = self.pipeline.analyze_controllers(run_ids=eligible_run_ids)
         for run_id, reason in controller_analysis.skipped_run_reasons:
             logger.warning("Controller population skipped run_%06d: %s", run_id, reason)
         logger.info(
@@ -203,8 +216,10 @@ class MonteCarloWorkbench:
             len(controller_analysis.skipped_run_ids),
         )
         logger.info("Starting active-power transfer analysis")
-        transfer_analysis = self.pipeline.analyze_power_transfers()
-        high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components()
+        transfer_analysis = self.pipeline.analyze_power_transfers(run_ids=eligible_run_ids)
+        high_frequency_analysis = self.pipeline.detect_high_frequency_transfer_components(
+            run_ids=eligible_run_ids
+        )
         logger.info("Active-power transfer analysis completed")
 
         logger.info("Starting angular stability")
@@ -213,7 +228,9 @@ class MonteCarloWorkbench:
                 "Angular signal normalization: %s",
                 self.angular_signal_normalization.name,
             )
-        self.angular_stability_result = self.create_angular_stability()
+        self.angular_stability_result = self.create_angular_stability(
+            initialization_eligible_run_ids=eligible_run_ids
+        )
         logger.info("Angular stability completed")
         self.dynamic_stability_analysis = self.pipeline.analyze_contingency_dynamic_stability(
             study_analysis,
@@ -250,10 +267,18 @@ class MonteCarloWorkbench:
         )
         for bus_analysis in study_analysis.bus_analyses:
             self._publish_bus_analysis(bus_analysis, controller_analysis)
-        self._publish_transfer_analysis(transfer_analysis, high_frequency_analysis)
+        if transfer_analysis.assessments:
+            self._publish_transfer_analysis(transfer_analysis, high_frequency_analysis)
+        else:
+            logger.warning(
+                "Transfer, high-frequency, and damping figures were skipped: "
+                "no run passed the initialization gate."
+            )
         logger.info("Starting spatial stability")
         self._spatial_voltage_scope = "Selected Monte Carlo buses: " + ", ".join(buses)
-        self.spatial_stability_result = self.create_spatial_stability()
+        self.spatial_stability_result = self.create_spatial_stability(
+            initialization_eligible_run_ids=eligible_run_ids
+        )
 
         AnalysisReport(
             study_analysis,
@@ -278,7 +303,12 @@ class MonteCarloWorkbench:
         logger.info("Monte Carlo analysis completed")
         return study_analysis
 
-    def create_spatial_stability(self, *, output_directory: str | Path | None = None):
+    def create_spatial_stability(
+        self,
+        *,
+        output_directory: str | Path | None = None,
+        initialization_eligible_run_ids: tuple[int, ...] | None = None,
+    ):
         """Map the same Monte Carlo voltage/damping/angular labels used by the report.
 
         Reuse available global classifications; a dedicated spatial call evaluates
@@ -289,6 +319,12 @@ class MonteCarloWorkbench:
             raise RuntimeError("Open a study before starting spatial analysis.")
         output = Path(output_directory) if output_directory is not None else self.analysis_output_directory() / "05_Spatial_Stability"
         logger = self._analysis_logger()
+        spatial_runs = tuple(
+            run
+            for run in self.pipeline.context.runs
+            if initialization_eligible_run_ids is None
+            or run.run_id in initialization_eligible_run_ids
+        )
         native = getattr(self, "dynamic_stability_analysis", None)
         case_assessments = None
         if native is not None:
@@ -297,12 +333,25 @@ class MonteCarloWorkbench:
             case_assessments = {
                 run.run_id: cached.get(run.run_id) or assess_monte_carlo_stability(
                     run.run_id, "Not evaluated", "Not measurable")
-                for run in self.pipeline.context.runs
+                for run in spatial_runs
             }
+        if not spatial_runs:
+            logger.warning("Spatial stability skipped: no run passed initialization.")
+            return SpatialStabilityAnalyzer.create_optional(
+                self.study.assets,
+                self.pipeline.profile,
+                (),
+                output,
+                include_angle=True,
+                monte_carlo_policy=True,
+                case_assessments={},
+                voltage_scope=self._spatial_voltage_scope,
+                progress=logger.info,
+            )
         result = SpatialStabilityAnalyzer.create_optional(
             self.study.assets,
             self.pipeline.profile,
-            self.pipeline.context.runs,
+            spatial_runs,
             output,
             include_angle=True,
             monte_carlo_policy=True,
@@ -329,6 +378,7 @@ class MonteCarloWorkbench:
         self,
         *,
         output_directory: str | Path | None = None,
+        initialization_eligible_run_ids: tuple[int, ...] | None = None,
     ) -> AngularStabilityResult:
         """Evaluate selected runs under ``04_Angular_Stability``."""
         if self.study is None:
@@ -343,6 +393,7 @@ class MonteCarloWorkbench:
             self.pipeline.scenario,
             self.study.assets,
             self.angular_signal_normalization,
+            initialization_eligible_run_ids,
         ).create(output)
         unavailable = sum(
             item.status == "Not evaluated"

@@ -94,16 +94,35 @@ class MonteCarloAngularStability:
         scenario: ContingencyScenario,
         assets: Assets,
         angular_signal_normalization: AngularSignalNormalization | None = None,
+        initialization_eligible_run_ids: tuple[int, ...] | None = None,
     ) -> None:
         self.runs = tuple(runs)
         self.scenario = scenario
         self.assets = assets
         self.angular_signal_normalization = angular_signal_normalization
+        self.initialization_eligible_run_ids = (
+            set(initialization_eligible_run_ids)
+            if initialization_eligible_run_ids is not None
+            else None
+        )
 
     def analyze(self) -> AngularStudyAnalysis:
         """Evaluate every run, retaining compact evidence only."""
         assessments = []
         for run in self.runs:
+            if (
+                self.initialization_eligible_run_ids is not None
+                and run.run_id not in self.initialization_eligible_run_ids
+            ):
+                assessments.append(
+                    AngularRunAssessment(
+                        run.run_id,
+                        "Not evaluated",
+                        None,
+                        "Initialization warning: downstream analysis excluded.",
+                    )
+                )
+                continue
             if run.dataset is None:
                 assessments.append(
                     AngularRunAssessment(

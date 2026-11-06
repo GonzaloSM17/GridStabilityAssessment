@@ -60,6 +60,7 @@ class ExtremeCasesWorkbench:
         signal_index_path: str | Path | None = None,
         assets_path: str | Path | None = None,
         angular_signal_normalization: AngularSignalNormalization | None = None,
+        evaluate_despite_initialization: bool = False,
     ) -> None:
         self.context = ExtremeCasesContext(root_path)
         self.scenario = scenario or DEFAULT_CONTINGENCY_SCENARIO
@@ -77,6 +78,7 @@ class ExtremeCasesWorkbench:
         self._logger = None
         self.assets = Assets(assets_path) if assets_path is not None else None
         self.angular_signal_normalization = angular_signal_normalization
+        self.evaluate_despite_initialization = evaluate_despite_initialization
 
     @property
     def output_directory(self) -> Path:
@@ -144,14 +146,36 @@ class ExtremeCasesWorkbench:
         kimal_measurement = study.bus("KIMAL_220").voltage_rms()
         kimal_signal_analysis = pipeline.analyze_measurement(
             kimal_measurement,
-            evaluate_despite_initialization=True,
+            evaluate_despite_initialization=self.evaluate_despite_initialization,
         )
         study_analysis = StudyAnalysis((
             BusStudyAnalysis("KIMAL_220", kimal_signal_analysis),
         ))
-        controller_analysis = self._controller_analysis()
-        transfer_analysis = pipeline.analyze_power_transfers()
-        high_frequency_analysis = pipeline.detect_high_frequency_transfer_components()
+        eligible_run_ids = (
+            study_analysis.run_ids
+            if self.evaluate_despite_initialization
+            else study_analysis.initialization_eligible_run_ids
+        )
+        blocked_run_ids = tuple(
+            run_id for run_id in study_analysis.run_ids if run_id not in eligible_run_ids
+        )
+        if self.evaluate_despite_initialization:
+            logger.warning(
+                "Diagnostic mode is evaluating %d initialization-warning case(s); "
+                "their formal voltage conclusion remains Not evaluated.",
+                len(study_analysis.initialization_blocked_run_ids),
+            )
+        elif blocked_run_ids:
+            logger.warning(
+                "Initialization gate excluded %d case(s) from downstream analysis: %s",
+                len(blocked_run_ids),
+                ", ".join(f"run_{run_id:06d}" for run_id in blocked_run_ids),
+            )
+        controller_analysis = self._controller_analysis(run_ids=eligible_run_ids)
+        transfer_analysis = pipeline.analyze_power_transfers(run_ids=eligible_run_ids)
+        high_frequency_analysis = pipeline.detect_high_frequency_transfer_components(
+            run_ids=eligible_run_ids
+        )
         angular_result = None
         if self.assets is not None:
             angular_result = MonteCarloAngularStability(
@@ -159,6 +183,7 @@ class ExtremeCasesWorkbench:
                 self.scenario,
                 self.assets,
                 self.angular_signal_normalization,
+                eligible_run_ids,
             ).create(self.output_directory / "04_Angular_Stability")
         dynamic_stability_analysis = pipeline.analyze_contingency_dynamic_stability(
             study_analysis,
@@ -202,8 +227,13 @@ class ExtremeCasesWorkbench:
             report_path,
         )
 
-    def _controller_analysis(self) -> ControllerStudyAnalysis:
+    def _controller_analysis(
+        self,
+        *,
+        run_ids: tuple[int, ...] | None = None,
+    ) -> ControllerStudyAnalysis:
         """Represent each all-unit common setting as its coincident weighted point."""
+        selected_run_ids = set(run_ids) if run_ids is not None else None
         points = tuple(
             ControllerPoint(
                 run_id=run_id,
@@ -213,6 +243,7 @@ class ExtremeCasesWorkbench:
                 nominal_power_mva=1.0,
             )
             for run_id, case in enumerate(self.context.cases, start=1)
+            if selected_run_ids is None or run_id in selected_run_ids
         )
         weighted = tuple(
             WeightedControllerPoint(
@@ -252,22 +283,28 @@ class ExtremeCasesWorkbench:
 
         directory = self.output_directory / "02_KIMAL220"
         remove_figure_with_spanish_copy(directory / "08_unified_response.png")
-        figures = [
-            ("01_initialization.png", pipeline.plot_initialization(analysis)),
-            ("02_voltage.png", pipeline.plot_voltage_stability(analysis)),
-            ("03_voltage_contingency.png", pipeline.plot_voltage_contingency_closeup(analysis)),
-            ("04_voltage_fault_closeup.png", pipeline.plot_voltage_fault_closeup(analysis)),
-            ("05_frequency.png", pipeline.plot_frequency_by_voltage_stability(analysis)),
-            ("06_fault_on.png", pipeline.plot_fault_on_area_vs_weighted_controllers(controllers, analysis)),
-            ("07_recovery.png", pipeline.plot_recovery_area_vs_weighted_controllers(controllers, analysis)),
-            ("08_idd.png", pipeline.plot_idd_area_vs_weighted_controllers(controllers, analysis)),
-            ("09_below_070.png", pipeline.plot_crisis_decision_vs_weighted_controllers(controllers, analysis)),
-            ("10_below_080.png", pipeline.plot_low_voltage_duration_vs_weighted_controllers(controllers, analysis)),
-        ]
+        figures = [("01_initialization.png", pipeline.plot_initialization(analysis))]
+        if analysis.has_stability_assessments:
+            figures.extend((
+                ("02_voltage.png", pipeline.plot_voltage_stability(analysis)),
+                ("03_voltage_contingency.png", pipeline.plot_voltage_contingency_closeup(analysis)),
+                ("04_voltage_fault_closeup.png", pipeline.plot_voltage_fault_closeup(analysis)),
+                ("05_frequency.png", pipeline.plot_frequency_by_voltage_stability(analysis)),
+            ))
+            if controllers.weighted_run_points:
+                figures.extend((
+                    ("06_fault_on.png", pipeline.plot_fault_on_area_vs_weighted_controllers(controllers, analysis)),
+                    ("07_recovery.png", pipeline.plot_recovery_area_vs_weighted_controllers(controllers, analysis)),
+                    ("08_idd.png", pipeline.plot_idd_area_vs_weighted_controllers(controllers, analysis)),
+                    ("09_below_070.png", pipeline.plot_crisis_decision_vs_weighted_controllers(controllers, analysis)),
+                    ("10_below_080.png", pipeline.plot_low_voltage_duration_vs_weighted_controllers(controllers, analysis)),
+                ))
         return tuple(self._save_figure(figure, directory, filename) for filename, figure in figures)
 
     def _publish_transfer_figures(self, pipeline, transfer_analysis, high_frequency_analysis) -> tuple[Path, ...]:
         directory = self.output_directory / "03_Transfer_Stability"
+        if not transfer_analysis.assessments:
+            return ()
         figures = [
             ("01_power_overview.png", pipeline.plot_power_transfer_overview(transfer_analysis=transfer_analysis)),
         ]
